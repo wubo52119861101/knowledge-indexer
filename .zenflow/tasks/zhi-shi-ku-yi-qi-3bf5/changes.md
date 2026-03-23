@@ -86,3 +86,6 @@
 - `tests/test_indexing_service.py`
 - `tests/test_retrieval_service.py`
 
+## 本次补充文档
+- `README.md`
+- `docs/usage.md`

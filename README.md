@@ -15,6 +15,8 @@ pip install -e .[dev]
 uvicorn app.main:app --reload
 ```
 
+完整使用说明见 `docs/usage.md`。
+
 ## 环境变量
 复制 `.env.example` 为 `.env` 后按需修改：
 - `INTERNAL_API_TOKEN`：内部接口鉴权 Token，留空则关闭校验
