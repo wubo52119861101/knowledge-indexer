@@ -1,0 +1,88 @@
+# 编码实现变更清单
+
+## 新增文件
+- `.gitignore`
+- `.env.example`
+- `pyproject.toml`
+- `README.md`
+- `migrations/README.md`
+- `app/main.py`
+- `app/api/health.py`
+- `app/api/internal_ask.py`
+- `app/api/internal_search.py`
+- `app/api/jobs.py`
+- `app/api/responses.py`
+- `app/api/sources.py`
+- `app/connectors/base.py`
+- `app/connectors/custom_api_connector.py`
+- `app/connectors/file_connector.py`
+- `app/connectors/postgres_connector.py`
+- `app/core/config.py`
+- `app/core/container.py`
+- `app/core/database.py`
+- `app/core/logger.py`
+- `app/core/minio.py`
+- `app/core/redis.py`
+- `app/core/security.py`
+- `app/core/utils.py`
+- `app/flows/api_index_flow.py`
+- `app/flows/file_index_flow.py`
+- `app/flows/postgres_index_flow.py`
+- `app/models/checkpoint.py`
+- `app/models/chunk.py`
+- `app/models/common.py`
+- `app/models/document.py`
+- `app/models/job.py`
+- `app/models/source.py`
+- `app/repositories/checkpoint_repo.py`
+- `app/repositories/chunk_repo.py`
+- `app/repositories/document_repo.py`
+- `app/repositories/job_repo.py`
+- `app/repositories/source_repo.py`
+- `app/schemas/common.py`
+- `app/schemas/document.py`
+- `app/schemas/job.py`
+- `app/schemas/retrieval.py`
+- `app/schemas/source.py`
+- `app/services/document_processor.py`
+- `app/services/embedding_service.py`
+- `app/services/indexing_service.py`
+- `app/services/job_service.py`
+- `app/services/qa_service.py`
+- `app/services/retrieval_service.py`
+- `app/services/source_service.py`
+- `scripts/rebuild_index.py`
+- `scripts/run_full_sync.py`
+- `scripts/run_incremental_sync.py`
+- `docker/Dockerfile`
+- `docker/docker-compose.yml`
+- `docker/init.sql`
+- `tests/test_document_processor.py`
+- `tests/test_qa_service.py`
+- `tests/test_retrieval_service.py`
+
+## 初始化占位文件
+- `app/__init__.py`
+- `app/api/__init__.py`
+- `app/connectors/__init__.py`
+- `app/core/__init__.py`
+- `app/flows/__init__.py`
+- `app/models/__init__.py`
+- `app/repositories/__init__.py`
+- `app/schemas/__init__.py`
+- `app/services/__init__.py`
+- `tests/__init__.py`
+
+## 说明
+- 一期编码实现优先交付可运行骨架与核心链路，默认使用内存仓储与确定性哈希向量，便于先跑通 API 与领域流程。
+- PostgreSQL/pgvector、Redis、MinIO、CocoIndex 流程与 Postgres 数据源均已预留扩展点，后续可在不破坏接口契约的前提下替换实现。
+
+## Review 后修复
+- `pyproject.toml`
+- `app/core/container.py`
+- `app/repositories/document_repo.py`
+- `app/services/indexing_service.py`
+- `app/services/retrieval_service.py`
+- `tests/test_indexing_service.py`
+- `tests/test_retrieval_service.py`
+
