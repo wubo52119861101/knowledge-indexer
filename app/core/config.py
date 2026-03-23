@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True)
 
     app_name: str = Field(default="knowledge-indexer", alias="APP_NAME")
     app_env: str = Field(default="local", alias="APP_ENV")
@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     search_score_threshold: float = Field(default=0.12, alias="SEARCH_SCORE_THRESHOLD")
     min_evidence_count: int = Field(default=1, alias="MIN_EVIDENCE_COUNT")
     sync_run_inline: bool = Field(default=True, alias="SYNC_RUN_INLINE")
+    repository_backend: str = Field(default="inmemory", alias="REPOSITORY_BACKEND")
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     minio_endpoint: str | None = Field(default=None, alias="MINIO_ENDPOINT")

@@ -35,7 +35,7 @@
 - 并行 vs 串行执行建议
 - 每个子任务的完成标准（DoD）
 
-### [ ] Step: T1 持久化仓储底座落地
+### [x] Step: T1 持久化仓储底座落地
 <!-- chat-id: 1eef350e-6db9-4927-aca9-6c5054503653 -->
 将当前内存仓储替换为 PostgreSQL + pgvector 实现：
 - 补齐表结构（kb_sources / kb_sync_jobs / kb_sync_checkpoints / kb_documents / kb_chunks）、索引和初始化脚本

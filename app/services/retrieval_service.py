@@ -3,9 +3,9 @@ from __future__ import annotations
 from app.core.utils import cosine_similarity
 from app.models.common import DocumentStatus
 from app.models.document import Document, DocumentAcl
-from app.repositories.chunk_repo import InMemoryChunkRepository
-from app.repositories.document_repo import InMemoryDocumentRepository
-from app.repositories.source_repo import InMemorySourceRepository
+from app.repositories.chunk_repo import ChunkRepository
+from app.repositories.document_repo import DocumentRepository
+from app.repositories.source_repo import SourceRepository
 from app.schemas.retrieval import AclContext, CitationItem, SearchDocument, SearchFilters, SearchItem, SearchSource
 from app.services.embedding_service import HashEmbeddingService
 
@@ -13,9 +13,9 @@ from app.services.embedding_service import HashEmbeddingService
 class RetrievalService:
     def __init__(
         self,
-        source_repo: InMemorySourceRepository,
-        document_repo: InMemoryDocumentRepository,
-        chunk_repo: InMemoryChunkRepository,
+        source_repo: SourceRepository,
+        document_repo: DocumentRepository,
+        chunk_repo: ChunkRepository,
         embedding_service: HashEmbeddingService,
         min_score_threshold: float = 0.0,
     ) -> None:

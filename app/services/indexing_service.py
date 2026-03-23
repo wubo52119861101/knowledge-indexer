@@ -9,10 +9,10 @@ from app.models.common import AclEffect, AclType, EmbeddingStatus, SyncMode, gen
 from app.models.document import Document, DocumentAcl
 from app.models.job import IndexJob
 from app.models.source import Source
-from app.repositories.checkpoint_repo import InMemoryCheckpointRepository
-from app.repositories.chunk_repo import InMemoryChunkRepository
-from app.repositories.document_repo import InMemoryDocumentRepository
-from app.repositories.source_repo import InMemorySourceRepository
+from app.repositories.checkpoint_repo import CheckpointRepository
+from app.repositories.chunk_repo import ChunkRepository
+from app.repositories.document_repo import DocumentRepository
+from app.repositories.source_repo import SourceRepository
 from app.services.document_processor import DocumentProcessor
 from app.services.embedding_service import HashEmbeddingService
 from app.services.job_service import JobService
@@ -21,10 +21,10 @@ from app.services.job_service import JobService
 class IndexingService:
     def __init__(
         self,
-        source_repo: InMemorySourceRepository,
-        document_repo: InMemoryDocumentRepository,
-        chunk_repo: InMemoryChunkRepository,
-        checkpoint_repo: InMemoryCheckpointRepository,
+        source_repo: SourceRepository,
+        document_repo: DocumentRepository,
+        chunk_repo: ChunkRepository,
+        checkpoint_repo: CheckpointRepository,
         job_service: JobService,
         document_processor: DocumentProcessor,
         embedding_service: HashEmbeddingService,

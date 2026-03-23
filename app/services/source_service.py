@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from app.models.common import SourceType, generate_id
 from app.models.source import Source
-from app.repositories.source_repo import InMemorySourceRepository
+from app.repositories.source_repo import SourceRepository
 from app.schemas.source import CreateSourceRequest
 
 
 class SourceService:
-    def __init__(self, source_repo: InMemorySourceRepository) -> None:
+    def __init__(self, source_repo: SourceRepository) -> None:
         self.source_repo = source_repo
 
     def create_source(self, request: CreateSourceRequest) -> Source:

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from app.models.common import JobStatus, SyncMode, generate_id, utcnow
 from app.models.job import IndexJob
-from app.repositories.job_repo import InMemoryJobRepository
+from app.repositories.job_repo import JobRepository
 
 
 class JobService:
-    def __init__(self, job_repo: InMemoryJobRepository) -> None:
+    def __init__(self, job_repo: JobRepository) -> None:
         self.job_repo = job_repo
 
     def create_job(self, source_id: str, mode: SyncMode, triggered_by: str) -> IndexJob:
