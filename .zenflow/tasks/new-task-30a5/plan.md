@@ -36,6 +36,7 @@
 - 每个子任务的完成标准（DoD）
 
 ### [ ] Step: Code Review
+<!-- chat-id: e5524b57-3a8b-4439-9c00-754d668b0b03 -->
 <!-- agent: codex-gpt-5-2-codex -->
 对编码实现进行代码审查，检查以下维度并输出到 `{@artifacts_path}/review.md`：
 - 正确性：逻辑是否符合需求和技术方案
