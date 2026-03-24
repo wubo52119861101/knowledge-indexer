@@ -5,7 +5,7 @@ from typing import Any
 
 from app.connectors.base import BaseConnector
 from app.models.chunk import Chunk
-from app.models.common import AclEffect, AclType, EmbeddingStatus, SyncMode, generate_id, utcnow
+from app.models.common import AclEffect, AclType, EmbeddingStatus, JobFailureStage, SyncMode, generate_id, utcnow
 from app.models.document import Document, DocumentAcl
 from app.models.job import IndexJob
 from app.models.source import Source
@@ -38,48 +38,42 @@ class IndexingService:
         self.embedding_service = embedding_service
 
     def run_job(self, source: Source, job: IndexJob, connector: BaseConnector) -> IndexJob:
-        self.job_service.mark_running(job)
         checkpoint = self.checkpoint_repo.get(source.id, "default")
+        checkpoint_before = checkpoint.checkpoint_value if checkpoint else None
+        if job.checkpoint_before != checkpoint_before:
+            job.checkpoint_before = checkpoint_before
+            self.job_service.save(job)
+
+        self.job_service.mark_running(job)
         is_full_snapshot = job.mode in {SyncMode.FULL, SyncMode.REBUILD}
 
         try:
-            raw_records = (
-                connector.pull_full(source)
-                if is_full_snapshot
-                else connector.pull_incremental(source, checkpoint.checkpoint_value if checkpoint else None)
+            raw_records = self._pull_records(
+                source=source,
+                connector=connector,
+                is_full_snapshot=is_full_snapshot,
+                checkpoint_before=checkpoint_before,
             )
             processed_count = 0
             failed_count = 0
-            latest_checkpoint = checkpoint.checkpoint_value if checkpoint else None
+            latest_checkpoint = checkpoint_before
             seen_external_doc_ids: set[str] = set()
             error_messages: list[str] = []
+            last_failure_stage: JobFailureStage | None = None
 
             for raw_record in raw_records:
                 try:
                     payload = connector.normalize(source, raw_record)
+                except Exception as exc:
+                    failed_count += 1
+                    last_failure_stage = JobFailureStage.NORMALIZE
+                    error_messages.append(str(exc))
+                    self.job_service.update_progress(job, processed_count=processed_count, failed_count=failed_count)
+                    continue
+
+                try:
                     seen_external_doc_ids.add(payload.external_doc_id)
-                    cleaned_text = self.document_processor.clean_text(payload.content)
-                    content_hash = hashlib.sha256(cleaned_text.encode("utf-8")).hexdigest()
-                    document = self.document_repo.upsert(
-                        Document(
-                            id=generate_id("doc"),
-                            source_id=source.id,
-                            external_doc_id=payload.external_doc_id,
-                            title=payload.title,
-                            content_text=cleaned_text,
-                            content_hash=content_hash,
-                            doc_type=payload.doc_type,
-                            metadata=payload.metadata,
-                            acl_entries=[
-                                DocumentAcl(
-                                    acl_type=AclType(acl_item.type),
-                                    acl_value=acl_item.value,
-                                    effect=AclEffect(acl_item.effect),
-                                )
-                                for acl_item in payload.acl
-                            ],
-                        )
-                    )
+                    document = self._persist_document(source, payload)
                     chunks = self._build_chunks(document)
                     self.chunk_repo.replace_for_document(document.id, chunks)
                     processed_count += 1
@@ -87,9 +81,17 @@ class IndexingService:
                         latest_checkpoint,
                         payload.metadata.get("updated_at") or utcnow().timestamp(),
                     )
+                    self.job_service.update_progress(
+                        job,
+                        processed_count=processed_count,
+                        failed_count=failed_count,
+                        checkpoint_after=str(latest_checkpoint) if latest_checkpoint is not None else None,
+                    )
                 except Exception as exc:
                     failed_count += 1
+                    last_failure_stage = self._failure_stage_for_exception(exc)
                     error_messages.append(str(exc))
+                    self.job_service.update_progress(job, processed_count=processed_count, failed_count=failed_count)
 
             if failed_count > 0:
                 summary = "; ".join(error_messages[:3]) if error_messages else "record processing failed"
@@ -97,23 +99,79 @@ class IndexingService:
                     job,
                     error_summary=f"{failed_count} record(s) failed: {summary}",
                     failed_count=failed_count,
+                    failure_stage=last_failure_stage,
                 )
 
-            if is_full_snapshot:
-                removed_documents = self.document_repo.mark_missing_as_deleted(source.id, seen_external_doc_ids)
-                for document in removed_documents:
-                    self.chunk_repo.replace_for_document(document.id, [])
-
+            self._finalize_snapshot(source.id, is_full_snapshot, seen_external_doc_ids)
             if latest_checkpoint is not None:
                 self.checkpoint_repo.save(source.id, "default", str(latest_checkpoint))
             self.source_repo.touch_sync(source.id)
-            return self.job_service.mark_succeeded(job, processed_count=processed_count, failed_count=failed_count)
+            return self.job_service.mark_succeeded(
+                job,
+                processed_count=processed_count,
+                failed_count=failed_count,
+                checkpoint_after=str(latest_checkpoint) if latest_checkpoint is not None else None,
+            )
         except Exception as exc:
-            return self.job_service.mark_failed(job, error_summary=str(exc), failed_count=job.failed_count)
+            return self.job_service.mark_failed(
+                job,
+                error_summary=str(exc),
+                failed_count=job.failed_count,
+                failure_stage=JobFailureStage.PULL,
+            )
+
+    def _pull_records(
+        self,
+        *,
+        source: Source,
+        connector: BaseConnector,
+        is_full_snapshot: bool,
+        checkpoint_before: str | None,
+    ) -> list[Any]:
+        if is_full_snapshot:
+            return connector.pull_full(source)
+        return connector.pull_incremental(source, checkpoint_before)
+
+    def _persist_document(self, source: Source, payload) -> Document:
+        cleaned_text = self.document_processor.clean_text(payload.content)
+        content_hash = hashlib.sha256(cleaned_text.encode("utf-8")).hexdigest()
+        return self.document_repo.upsert(
+            Document(
+                id=generate_id("doc"),
+                source_id=source.id,
+                external_doc_id=payload.external_doc_id,
+                title=payload.title,
+                content_text=cleaned_text,
+                content_hash=content_hash,
+                doc_type=payload.doc_type,
+                metadata=payload.metadata,
+                acl_entries=[
+                    DocumentAcl(
+                        acl_type=AclType(acl_item.type),
+                        acl_value=acl_item.value,
+                        effect=AclEffect(acl_item.effect),
+                    )
+                    for acl_item in payload.acl
+                ],
+            )
+        )
+
+    def _finalize_snapshot(self, source_id: str, is_full_snapshot: bool, seen_external_doc_ids: set[str]) -> None:
+        if not is_full_snapshot:
+            return
+
+        removed_documents = self.document_repo.mark_missing_as_deleted(source_id, seen_external_doc_ids)
+        for document in removed_documents:
+            self.chunk_repo.replace_for_document(document.id, [])
 
     def _build_chunks(self, document: Document) -> list[Chunk]:
         chunks: list[Chunk] = []
         for chunk_index, chunk_text in enumerate(self.document_processor.split_text(document.content_text)):
+            try:
+                embedding = self.embedding_service.embed(chunk_text)
+            except Exception as exc:
+                raise RuntimeError(str(exc)) from EmbeddingStageError(str(exc))
+
             chunks.append(
                 Chunk(
                     id=generate_id("chk"),
@@ -123,11 +181,16 @@ class IndexingService:
                     summary=self.document_processor.summarize(chunk_text),
                     token_count=self.document_processor.estimate_token_count(chunk_text),
                     metadata={"source_id": document.source_id, "doc_type": document.doc_type},
-                    embedding=self.embedding_service.embed(chunk_text),
+                    embedding=embedding,
                     embedding_status=EmbeddingStatus.DONE,
                 )
             )
         return chunks
+
+    def _failure_stage_for_exception(self, exc: Exception) -> JobFailureStage:
+        if exc.__cause__ is not None and isinstance(exc.__cause__, EmbeddingStageError):
+            return JobFailureStage.EMBED
+        return JobFailureStage.PERSIST
 
     def _max_checkpoint(self, current_value: str | float | int | None, candidate_value: Any) -> str | float | int | None:
         if candidate_value is None:
@@ -146,3 +209,7 @@ class IndexingService:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+
+class EmbeddingStageError(RuntimeError):
+    pass

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 
 from app.core.database import PostgresRepositoryBase
+from app.models.common import JobStatus
 from app.models.job import IndexJob
 
 
@@ -12,6 +14,10 @@ class JobRepository(Protocol):
     def get(self, job_id: str) -> IndexJob | None: ...
 
     def latest_for_source(self, source_id: str) -> IndexJob | None: ...
+
+    def active_for_source(self, source_id: str) -> IndexJob | None: ...
+
+    def list_running(self) -> list[IndexJob]: ...
 
     def save(self, job: IndexJob) -> IndexJob: ...
 
@@ -32,6 +38,16 @@ class InMemoryJobRepository:
         source_jobs.sort(key=lambda item: item.created_at, reverse=True)
         return source_jobs[0] if source_jobs else None
 
+    def active_for_source(self, source_id: str) -> IndexJob | None:
+        source_jobs = [job for job in self._jobs.values() if job.source_id == source_id and job.is_active]
+        source_jobs.sort(key=lambda item: item.created_at, reverse=True)
+        return source_jobs[0] if source_jobs else None
+
+    def list_running(self) -> list[IndexJob]:
+        jobs = [job for job in self._jobs.values() if job.status is JobStatus.RUNNING]
+        jobs.sort(key=lambda item: item.created_at)
+        return jobs
+
     def save(self, job: IndexJob) -> IndexJob:
         self._jobs[job.id] = job
         return job
@@ -43,9 +59,9 @@ class PostgresJobRepository(PostgresRepositoryBase):
             """
             INSERT INTO kb_sync_jobs (
                 id, source_id, mode, status, triggered_by,
-                processed_count, failed_count, error_summary, snapshot_path,
-                started_at, finished_at, created_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                processed_count, failed_count, error_summary, failure_stage, snapshot_path,
+                checkpoint_before, checkpoint_after, started_at, finished_at, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 job.id,
@@ -56,7 +72,10 @@ class PostgresJobRepository(PostgresRepositoryBase):
                 job.processed_count,
                 job.failed_count,
                 job.error_summary,
+                job.failure_stage.value if job.failure_stage else None,
                 job.snapshot_path,
+                job.checkpoint_before,
+                job.checkpoint_after,
                 job.started_at,
                 job.finished_at,
                 job.created_at,
@@ -68,7 +87,8 @@ class PostgresJobRepository(PostgresRepositoryBase):
         row = self._fetchone(
             """
             SELECT id, source_id, mode, status, triggered_by, processed_count,
-                   failed_count, error_summary, snapshot_path, started_at, finished_at, created_at
+                   failed_count, error_summary, failure_stage, snapshot_path,
+                   checkpoint_before, checkpoint_after, started_at, finished_at, created_at
             FROM kb_sync_jobs
             WHERE id = %s
             """,
@@ -82,7 +102,8 @@ class PostgresJobRepository(PostgresRepositoryBase):
         row = self._fetchone(
             """
             SELECT id, source_id, mode, status, triggered_by, processed_count,
-                   failed_count, error_summary, snapshot_path, started_at, finished_at, created_at
+                   failed_count, error_summary, failure_stage, snapshot_path,
+                   checkpoint_before, checkpoint_after, started_at, finished_at, created_at
             FROM kb_sync_jobs
             WHERE source_id = %s
             ORDER BY created_at DESC
@@ -94,6 +115,37 @@ class PostgresJobRepository(PostgresRepositoryBase):
             return None
         return self._to_model(row)
 
+    def active_for_source(self, source_id: str) -> IndexJob | None:
+        row = self._fetchone(
+            """
+            SELECT id, source_id, mode, status, triggered_by, processed_count,
+                   failed_count, error_summary, failure_stage, snapshot_path,
+                   checkpoint_before, checkpoint_after, started_at, finished_at, created_at
+            FROM kb_sync_jobs
+            WHERE source_id = %s AND status IN (%s, %s)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (source_id, JobStatus.PENDING.value, JobStatus.RUNNING.value),
+        )
+        if row is None:
+            return None
+        return self._to_model(row)
+
+    def list_running(self) -> list[IndexJob]:
+        rows = self._fetchall(
+            """
+            SELECT id, source_id, mode, status, triggered_by, processed_count,
+                   failed_count, error_summary, failure_stage, snapshot_path,
+                   checkpoint_before, checkpoint_after, started_at, finished_at, created_at
+            FROM kb_sync_jobs
+            WHERE status = %s
+            ORDER BY created_at ASC
+            """,
+            (JobStatus.RUNNING.value,),
+        )
+        return [self._to_model(row) for row in rows]
+
     def save(self, job: IndexJob) -> IndexJob:
         self._execute(
             """
@@ -102,7 +154,10 @@ class PostgresJobRepository(PostgresRepositoryBase):
                 processed_count = %s,
                 failed_count = %s,
                 error_summary = %s,
+                failure_stage = %s,
                 snapshot_path = %s,
+                checkpoint_before = %s,
+                checkpoint_after = %s,
                 started_at = %s,
                 finished_at = %s
             WHERE id = %s
@@ -112,7 +167,10 @@ class PostgresJobRepository(PostgresRepositoryBase):
                 job.processed_count,
                 job.failed_count,
                 job.error_summary,
+                job.failure_stage.value if job.failure_stage else None,
                 job.snapshot_path,
+                job.checkpoint_before,
+                job.checkpoint_after,
                 job.started_at,
                 job.finished_at,
                 job.id,
@@ -121,7 +179,7 @@ class PostgresJobRepository(PostgresRepositoryBase):
         return job
 
     def _to_model(self, row: dict) -> IndexJob:
-        from app.models.common import JobStatus, SyncMode
+        from app.models.common import JobFailureStage, JobStatus, SyncMode
 
         return IndexJob(
             id=row["id"],
@@ -132,7 +190,10 @@ class PostgresJobRepository(PostgresRepositoryBase):
             processed_count=int(row["processed_count"]),
             failed_count=int(row["failed_count"]),
             error_summary=row["error_summary"],
+            failure_stage=JobFailureStage(row["failure_stage"]) if row["failure_stage"] else None,
             snapshot_path=row["snapshot_path"],
+            checkpoint_before=row["checkpoint_before"],
+            checkpoint_after=row["checkpoint_after"],
             started_at=row["started_at"],
             finished_at=row["finished_at"],
             created_at=row["created_at"],

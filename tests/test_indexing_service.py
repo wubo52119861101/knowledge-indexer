@@ -1,7 +1,7 @@
 from typing import Any
 
 from app.connectors.base import BaseConnector
-from app.models.common import JobStatus, SourceType, SyncMode, generate_id
+from app.models.common import JobFailureStage, JobStatus, SourceType, SyncMode, generate_id
 from app.models.document import Document
 from app.models.job import IndexJob
 from app.models.source import Source
@@ -98,6 +98,9 @@ def test_incremental_failure_does_not_advance_checkpoint() -> None:
 
     assert result.status is JobStatus.FAILED
     assert result.failed_count == 1
+    assert result.failure_stage is JobFailureStage.NORMALIZE
+    assert result.checkpoint_before == "10"
+    assert result.checkpoint_after is None
     assert checkpoint_repo.get(source.id, "default").checkpoint_value == "10"
     assert len(document_repo.list_all()) == 1
 

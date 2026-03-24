@@ -43,7 +43,8 @@
 - 改造 `app/core/container.py`，支持按配置切换 inmemory / postgres 仓储
 - 基础 CRUD 与 upsert 行为有单元测试覆盖
 
-### [ ] Step: T2 异步同步任务与状态机实现
+### [x] Step: T2 异步同步任务与状态机实现
+<!-- chat-id: 5071d6a0-1a45-4459-bb27-48ccc848cc18 -->
 引入 Redis 队列 / worker、任务状态流转、互斥控制：
 - 实现 SyncOrchestrator，支持创建任务 -> 入队 -> worker 执行 -> 持久化状态
 - 任务状态覆盖 PENDING / RUNNING / SUCCEEDED / FAILED / CANCELLED

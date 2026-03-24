@@ -20,12 +20,15 @@ from app.services.job_service import JobService
 from app.services.qa_service import QaService
 from app.services.retrieval_service import RetrievalService
 from app.services.source_service import SourceService
+from app.services.sync_orchestrator import SyncOrchestrator, SyncWorker
+from app.services.sync_queue import build_sync_queue
 
 
 class ServiceContainer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._setup_repositories()
+        self.sync_queue = build_sync_queue(settings)
 
         self.document_processor = DocumentProcessor(
             chunk_size=settings.default_chunk_size,
@@ -57,6 +60,20 @@ class ServiceContainer:
             SourceType.API: ApiIndexFlow(self.indexing_service, timeout_seconds=settings.api_connector_timeout_seconds),
             SourceType.POSTGRES: PostgresIndexFlow(self.indexing_service),
         }
+        self.sync_orchestrator = SyncOrchestrator(
+            settings=settings,
+            source_service=self.source_service,
+            checkpoint_repo=self.checkpoint_repo,
+            job_service=self.job_service,
+            sync_queue=self.sync_queue,
+            flows=self._flows,
+        )
+        self.sync_worker = None
+        if settings.sync_worker_enabled and not settings.sync_run_inline:
+            self.sync_worker = SyncWorker(
+                orchestrator=self.sync_orchestrator,
+                poll_timeout_seconds=settings.sync_worker_poll_timeout_seconds,
+            )
 
     def _setup_repositories(self) -> None:
         backend = self.settings.repository_backend.lower()
@@ -78,17 +95,15 @@ class ServiceContainer:
         self.checkpoint_repo = InMemoryCheckpointRepository()
 
     def trigger_sync(self, source_id: str, mode, operator: str):
-        source = self.source_service.get_source(source_id)
-        if source is None:
-            raise KeyError(f"source {source_id} not found")
-        if not source.enabled:
-            raise ValueError(f"source {source_id} is disabled")
+        return self.sync_orchestrator.trigger_sync(source_id=source_id, mode=mode, operator=operator)
 
-        job = self.job_service.create_job(source_id=source_id, mode=mode, triggered_by=operator)
-        if self.settings.sync_run_inline:
-            flow = self._flows[source.type]
-            return flow.run(source, job)
-        return job
+    def start_background_workers(self) -> None:
+        if self.sync_worker is not None:
+            self.sync_worker.start()
+
+    def shutdown_background_workers(self) -> None:
+        if self.sync_worker is not None:
+            self.sync_worker.stop()
 
 
 @lru_cache(maxsize=1)

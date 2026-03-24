@@ -67,10 +67,13 @@ class FakePostgresState:
                 "processed_count": params[5],
                 "failed_count": params[6],
                 "error_summary": params[7],
-                "snapshot_path": params[8],
-                "started_at": params[9],
-                "finished_at": params[10],
-                "created_at": params[11],
+                "failure_stage": params[8],
+                "snapshot_path": params[9],
+                "checkpoint_before": params[10],
+                "checkpoint_after": params[11],
+                "started_at": params[12],
+                "finished_at": params[13],
+                "created_at": params[14],
             }
             self.jobs[row["id"]] = row
             return None
@@ -78,20 +81,37 @@ class FakePostgresState:
         if "from kb_sync_jobs where id = %s" in normalized:
             return self.jobs.get(params[0])
 
+        if "from kb_sync_jobs where source_id = %s and status in (%s, %s) order by created_at desc limit 1" in normalized:
+            rows = [
+                row
+                for row in self.jobs.values()
+                if row["source_id"] == params[0] and row["status"] in {params[1], params[2]}
+            ]
+            rows.sort(key=lambda item: item["created_at"], reverse=True)
+            return rows[0] if rows else None
+
         if "from kb_sync_jobs where source_id = %s order by created_at desc limit 1" in normalized:
             rows = [row for row in self.jobs.values() if row["source_id"] == params[0]]
             rows.sort(key=lambda item: item["created_at"], reverse=True)
             return rows[0] if rows else None
 
+        if "from kb_sync_jobs where status = %s order by created_at asc" in normalized:
+            rows = [row for row in self.jobs.values() if row["status"] == params[0]]
+            rows.sort(key=lambda item: item["created_at"])
+            return rows
+
         if normalized.startswith("update kb_sync_jobs set status"):
-            row = self.jobs[params[7]]
+            row = self.jobs[params[10]]
             row["status"] = params[0]
             row["processed_count"] = params[1]
             row["failed_count"] = params[2]
             row["error_summary"] = params[3]
-            row["snapshot_path"] = params[4]
-            row["started_at"] = params[5]
-            row["finished_at"] = params[6]
+            row["failure_stage"] = params[4]
+            row["snapshot_path"] = params[5]
+            row["checkpoint_before"] = params[6]
+            row["checkpoint_after"] = params[7]
+            row["started_at"] = params[8]
+            row["finished_at"] = params[9]
             return None
 
         if "from kb_sync_checkpoints where source_id = %s and checkpoint_key = %s" in normalized:
