@@ -66,7 +66,8 @@
 <!-- chat-id: 3e1bcaf2-01fe-4a6f-b522-1fa5d49be537 -->
 对接口路径、字段、环境变量、示例、章节跳转和 README 入口进行统一校验与润色，确保最终手册可读、可用且与代码实现一致。
 
-### [ ] Step: Code Review
+### [x] Step: Code Review
+<!-- chat-id: 4a21878a-45b0-454b-9f77-1cfa528d36e6 -->
 <!-- agent: codex-gpt-5-2-codex -->
 对编码实现进行代码审查，检查以下维度并输出到 `{@artifacts_path}/review.md`：
 - 正确性：逻辑是否符合需求和技术方案
