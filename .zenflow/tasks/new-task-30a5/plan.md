@@ -88,7 +88,7 @@
 - 未覆盖风险点有显式记录
 - 风险记录：当前环境未安装 `fastapi`，`tests/test_health.py` 仍为 skipped，`/health` HTTP 层未纳入本轮回归
 
-### [ ] Step: Code Review
+### [x] Step: Code Review
 <!-- chat-id: e5524b57-3a8b-4439-9c00-754d668b0b03 -->
 <!-- agent: codex-gpt-5-2-codex -->
 对编码实现进行代码审查，检查以下维度并输出到 `{@artifacts_path}/review.md`：
