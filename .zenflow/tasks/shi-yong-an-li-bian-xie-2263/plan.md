@@ -7,7 +7,8 @@
 
 ## Workflow Steps
 
-### [ ] Step: 需求分析
+### [x] Step: 需求分析
+<!-- chat-id: 9aa41e34-2178-431f-bfa9-505af117aeb3 -->
 仔细阅读需求描述，分析业务背景、目标用户、核心功能点和边界条件。
 输出到 `{@artifacts_path}/requirements.md`，包含：
 - 需求背景与目标
