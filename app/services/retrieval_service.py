@@ -1,29 +1,38 @@
 from __future__ import annotations
 
-from app.core.utils import cosine_similarity
+from typing import Protocol
+
 from app.models.common import DocumentStatus
 from app.models.document import Document, DocumentAcl
-from app.repositories.chunk_repo import InMemoryChunkRepository
-from app.repositories.document_repo import InMemoryDocumentRepository
-from app.repositories.source_repo import InMemorySourceRepository
+from app.repositories.chunk_repo import ChunkRepository
+from app.repositories.document_repo import DocumentRepository
+from app.repositories.source_repo import SourceRepository
 from app.schemas.retrieval import AclContext, CitationItem, SearchDocument, SearchFilters, SearchItem, SearchSource
-from app.services.embedding_service import HashEmbeddingService
+from app.services.embedding_service import EmbeddingService
+
+
+class RerankService(Protocol):
+    def rerank(self, query: str, items: list[SearchItem]) -> list[SearchItem]: ...
 
 
 class RetrievalService:
     def __init__(
         self,
-        source_repo: InMemorySourceRepository,
-        document_repo: InMemoryDocumentRepository,
-        chunk_repo: InMemoryChunkRepository,
-        embedding_service: HashEmbeddingService,
+        source_repo: SourceRepository,
+        document_repo: DocumentRepository,
+        chunk_repo: ChunkRepository,
+        embedding_service: EmbeddingService,
         min_score_threshold: float = 0.0,
+        candidate_multiplier: int = 4,
+        rerank_service: RerankService | None = None,
     ) -> None:
         self.source_repo = source_repo
         self.document_repo = document_repo
         self.chunk_repo = chunk_repo
         self.embedding_service = embedding_service
         self.min_score_threshold = min_score_threshold
+        self.candidate_multiplier = max(1, candidate_multiplier)
+        self.rerank_service = rerank_service
 
     def search(
         self,
@@ -33,9 +42,12 @@ class RetrievalService:
         acl_context: AclContext,
     ) -> list[SearchItem]:
         query_embedding = self.embedding_service.embed(query)
-        scored_items: list[tuple[float, SearchItem]] = []
+        candidate_limit = max(top_k, top_k * self.candidate_multiplier)
+        candidates = self.chunk_repo.search_candidates(query_embedding, filters, candidate_limit)
+        items: list[SearchItem] = []
 
-        for chunk in self.chunk_repo.list_all():
+        for candidate in candidates:
+            chunk = candidate.chunk
             document = self.document_repo.get(chunk.document_id)
             if document is None or document.status is not DocumentStatus.ACTIVE:
                 continue
@@ -46,27 +58,26 @@ class RetrievalService:
                 continue
             if not self._has_access(document, acl_context):
                 continue
-
-            score = cosine_similarity(query_embedding, chunk.embedding)
-            if score < self.min_score_threshold:
+            if candidate.score < self.min_score_threshold:
                 continue
-            scored_items.append(
-                (
-                    score,
-                    SearchItem(
-                        chunk_id=chunk.id,
-                        document_id=document.id,
-                        score=round(score, 4),
-                        content=chunk.content,
-                        source=SearchSource(source_id=source.id, source_type=source.type.value),
-                        document=SearchDocument(title=document.title, external_id=document.external_doc_id),
-                        citation=CitationItem(doc_title=document.title, chunk_index=chunk.chunk_index),
-                    ),
+
+            items.append(
+                SearchItem(
+                    chunk_id=chunk.id,
+                    document_id=document.id,
+                    score=round(candidate.score, 4),
+                    content=chunk.content,
+                    source=SearchSource(source_id=source.id, source_type=source.type.value),
+                    document=SearchDocument(title=document.title, external_id=document.external_doc_id),
+                    citation=CitationItem(doc_title=document.title, chunk_index=chunk.chunk_index),
                 )
             )
 
-        scored_items.sort(key=lambda item: item[0], reverse=True)
-        return [item for _, item in scored_items[:top_k]]
+        if self.rerank_service is not None and items:
+            items = self.rerank_service.rerank(query, items)
+
+        items.sort(key=lambda item: item.score, reverse=True)
+        return items[:top_k]
 
     def _match_filters(self, document: Document, filters: SearchFilters) -> bool:
         if filters.source_ids and document.source_id not in filters.source_ids:

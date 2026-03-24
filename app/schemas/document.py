@@ -16,7 +16,9 @@ class AclEntryPayload(BaseModel):
 class DocumentPayload(BaseModel):
     external_doc_id: str = Field(min_length=1)
     title: str = Field(min_length=1)
-    content: str = Field(min_length=1)
+    content: str = ""
     doc_type: str = "text"
     metadata: dict[str, Any] = Field(default_factory=dict)
     acl: list[AclEntryPayload] = Field(default_factory=list)
+    deleted: bool = False
+    checkpoint_value: str | None = None

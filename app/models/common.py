@@ -22,6 +22,16 @@ class JobStatus(StrEnum):
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class JobFailureStage(StrEnum):
+    QUEUE = "queue"
+    PULL = "pull"
+    NORMALIZE = "normalize"
+    EMBED = "embed"
+    PERSIST = "persist"
+    WORKER = "worker"
 
 
 class DocumentStatus(StrEnum):

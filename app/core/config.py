@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True)
 
     app_name: str = Field(default="knowledge-indexer", alias="APP_NAME")
     app_env: str = Field(default="local", alias="APP_ENV")
@@ -15,9 +15,19 @@ class Settings(BaseSettings):
     default_chunk_size: int = Field(default=600, alias="DEFAULT_CHUNK_SIZE")
     default_chunk_overlap: int = Field(default=80, alias="DEFAULT_CHUNK_OVERLAP")
     embedding_dimension: int = Field(default=64, alias="EMBEDDING_DIMENSION")
+    embedding_provider: str = Field(default="hash", alias="EMBEDDING_PROVIDER")
+    embedding_api_url: str | None = Field(default=None, alias="EMBEDDING_API_URL")
+    embedding_model: str | None = Field(default=None, alias="EMBEDDING_MODEL")
+    embedding_api_key: str | None = Field(default=None, alias="EMBEDDING_API_KEY")
+    embedding_timeout_seconds: float = Field(default=10.0, alias="EMBEDDING_TIMEOUT_SECONDS")
     search_score_threshold: float = Field(default=0.12, alias="SEARCH_SCORE_THRESHOLD")
     min_evidence_count: int = Field(default=1, alias="MIN_EVIDENCE_COUNT")
+    retrieval_candidate_multiplier: int = Field(default=4, alias="RETRIEVAL_CANDIDATE_MULTIPLIER")
     sync_run_inline: bool = Field(default=True, alias="SYNC_RUN_INLINE")
+    sync_worker_enabled: bool = Field(default=True, alias="SYNC_WORKER_ENABLED")
+    sync_worker_poll_timeout_seconds: float = Field(default=1.0, alias="SYNC_WORKER_POLL_TIMEOUT_SECONDS")
+    sync_lock_ttl_seconds: int = Field(default=1800, alias="SYNC_LOCK_TTL_SECONDS")
+    repository_backend: str = Field(default="inmemory", alias="REPOSITORY_BACKEND")
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     minio_endpoint: str | None = Field(default=None, alias="MINIO_ENDPOINT")

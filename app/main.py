@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -9,12 +10,25 @@ from app.api.internal_ask import router as ask_router
 from app.api.internal_search import router as search_router
 from app.api.jobs import router as jobs_router
 from app.api.sources import router as sources_router
+from app.core.container import get_container
 from app.core.config import get_settings
 from app.core.logger import configure_logging
 
 configure_logging()
 settings = get_settings()
-app = FastAPI(title=settings.app_name, version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    container = get_container()
+    container.start_background_workers()
+    try:
+        yield
+    finally:
+        container.shutdown_background_workers()
+
+
+app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
 
 @app.middleware("http")
