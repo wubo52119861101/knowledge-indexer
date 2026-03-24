@@ -87,7 +87,9 @@ class ServiceContainer:
             source_id=source_id,
             mode=mode,
             triggered_by=operator,
-            pipeline_engine=self.pipeline_engine_service.resolve("sync"),
+            pipeline_engine=self.pipeline_engine_service.resolve_for_job(
+                self.pipeline_engine_service.describe_builtin_flow(flow)
+            ),
         )
         return self.job_runner.submit(job, lambda: flow.run(source, job))
 

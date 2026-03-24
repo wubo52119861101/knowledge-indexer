@@ -54,7 +54,8 @@
 <!-- chat-id: 6173008e-72be-4784-8d3c-036111569e55 -->
 新增 `/internal/jobs/{job_id}/cancel`，实现 `PENDING/RUNNING` 的取消状态流转、后台执行模式和 `IndexingService` 检查点终止能力，保证幂等与兼容。
 
-### [ ] Step: T4 pipeline_engine 对外可观测化
+### [x] Step: T4 pipeline_engine 对外可观测化
+<!-- chat-id: b73acff4-ae86-466f-8224-5c6951297e6a -->
 新增 `pipeline_engine` 解析服务，统一 `/health`、`/internal/ask`、`/internal/search`、`/internal/jobs/{id}` 的真实执行来源返回，并记录到任务对象。
 
 ### [ ] Step: T5 文档与实现侧单测补齐
