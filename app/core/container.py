@@ -4,6 +4,7 @@ from functools import lru_cache
 
 from app.core.config import Settings, get_settings
 from app.core.database import create_postgres_connection_factory
+from app.core.minio import build_object_storage_repository
 from app.flows.api_index_flow import ApiIndexFlow
 from app.flows.file_index_flow import FileIndexFlow
 from app.flows.postgres_index_flow import PostgresIndexFlow
@@ -29,6 +30,7 @@ class ServiceContainer:
         self.settings = settings
         self._setup_repositories()
         self.sync_queue = build_sync_queue(settings)
+        self.object_storage_repo = build_object_storage_repository(settings)
 
         self.document_processor = DocumentProcessor(
             chunk_size=settings.default_chunk_size,
@@ -45,6 +47,7 @@ class ServiceContainer:
             job_service=self.job_service,
             document_processor=self.document_processor,
             embedding_service=self.embedding_service,
+            object_storage_repo=self.object_storage_repo,
         )
         self.retrieval_service = RetrievalService(
             source_repo=self.source_repo,

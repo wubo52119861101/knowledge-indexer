@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 from threading import Event, Thread
 from time import sleep
 from typing import Any
 
 from app.core.config import Settings
-from app.core.logger import get_logger
+from app.core.logger import get_logger, log_event
 from app.models.common import JobFailureStage, JobStatus, SyncMode, generate_id
 from app.models.job import IndexJob
 from app.models.source import Source
@@ -63,9 +64,29 @@ class SyncOrchestrator:
                 checkpoint_before=checkpoint_before,
             )
             if self.settings.sync_run_inline:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "sync_job_inline_dispatched",
+                    checkpoint_before=checkpoint_before,
+                    job_id=job.id,
+                    mode=job.mode.value,
+                    source_id=job.source_id,
+                    status=job.status.value,
+                )
                 return self.process_job(job.id)
 
             self.sync_queue.enqueue(SyncQueueMessage(job_id=job.id, source_id=source_id))
+            log_event(
+                logger,
+                logging.INFO,
+                "sync_job_enqueued",
+                checkpoint_before=checkpoint_before,
+                job_id=job.id,
+                mode=job.mode.value,
+                source_id=job.source_id,
+                status=job.status.value,
+            )
             return job
         except Exception:
             self.sync_queue.release_source_lock(source_id, job_id)
@@ -97,27 +118,49 @@ class SyncOrchestrator:
             flow = self.flows[source.type]
             return flow.run(source, job)
         except Exception as exc:
-            return self.job_service.mark_failed(
+            result = self.job_service.mark_failed(
                 job,
                 error_summary=str(exc),
                 failed_count=job.failed_count,
                 failure_stage=JobFailureStage.WORKER,
             )
+            log_event(
+                logger,
+                logging.WARNING,
+                "sync_job_worker_failed",
+                failed_count=result.failed_count,
+                failure_stage=result.failure_stage.value if result.failure_stage else None,
+                job_id=result.id,
+                mode=result.mode.value,
+                source_id=result.source_id,
+                status=result.status.value,
+            )
+            return result
         finally:
             self.sync_queue.release_source_lock(job.source_id, job.id)
 
     def recover_running_jobs(self) -> list[IndexJob]:
         recovered: list[IndexJob] = []
         for job in self.job_service.list_running_jobs():
-            recovered.append(
-                self.job_service.mark_failed(
-                    job,
-                    error_summary="worker interrupted before job finished",
-                    failed_count=job.failed_count,
-                    failure_stage=JobFailureStage.WORKER,
-                )
+            result = self.job_service.mark_failed(
+                job,
+                error_summary="worker interrupted before job finished",
+                failed_count=job.failed_count,
+                failure_stage=JobFailureStage.WORKER,
             )
+            recovered.append(result)
             self.sync_queue.release_source_lock(job.source_id, job.id)
+            log_event(
+                logger,
+                logging.WARNING,
+                "sync_job_recovered_as_failed",
+                failed_count=result.failed_count,
+                failure_stage=result.failure_stage.value if result.failure_stage else None,
+                job_id=result.id,
+                mode=result.mode.value,
+                source_id=result.source_id,
+                status=result.status.value,
+            )
         return recovered
 
     def _get_runnable_source(self, job: IndexJob) -> Source:
@@ -153,6 +196,12 @@ class SyncWorker:
         while not self._stop_event.is_set():
             try:
                 self.orchestrator.process_next_job(timeout_seconds=self.poll_timeout_seconds)
-            except Exception:
+            except Exception as exc:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "sync_worker_loop_failed",
+                    error=str(exc),
+                )
                 logger.exception("sync worker loop failed")
                 sleep(0.1)

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any
 
 from app.connectors.base import BaseConnector
+from app.core.logger import get_logger, log_event
+from app.core.minio import DisabledObjectStorageRepository, ObjectStorageRepository
 from app.models.chunk import Chunk
 from app.models.common import AclEffect, AclType, DocumentStatus, EmbeddingStatus, JobFailureStage, SyncMode, generate_id, utcnow
 from app.models.document import Document, DocumentAcl
@@ -18,6 +21,9 @@ from app.services.embedding_service import EmbeddingService
 from app.services.job_service import JobService
 
 
+logger = get_logger(__name__)
+
+
 class IndexingService:
     def __init__(
         self,
@@ -28,6 +34,7 @@ class IndexingService:
         job_service: JobService,
         document_processor: DocumentProcessor,
         embedding_service: EmbeddingService,
+        object_storage_repo: ObjectStorageRepository | None = None,
     ) -> None:
         self.source_repo = source_repo
         self.document_repo = document_repo
@@ -36,6 +43,7 @@ class IndexingService:
         self.job_service = job_service
         self.document_processor = document_processor
         self.embedding_service = embedding_service
+        self.object_storage_repo = object_storage_repo or DisabledObjectStorageRepository()
 
     def run_job(self, source: Source, job: IndexJob, connector: BaseConnector) -> IndexJob:
         checkpoint = self.checkpoint_repo.get(source.id, "default")
@@ -45,7 +53,10 @@ class IndexingService:
             self.job_service.save(job)
 
         self.job_service.mark_running(job)
+        self._log_job_started(job)
         is_full_snapshot = job.mode in {SyncMode.FULL, SyncMode.REBUILD}
+        raw_records: list[Any] = []
+        failure_samples: list[dict[str, Any]] = []
 
         try:
             raw_records = self._pull_records(
@@ -54,6 +65,10 @@ class IndexingService:
                 is_full_snapshot=is_full_snapshot,
                 checkpoint_before=checkpoint_before,
             )
+            raw_snapshot_path = self._archive_raw_records(source.id, job.id, raw_records)
+            if raw_snapshot_path is not None:
+                self.job_service.set_snapshot_path(job, raw_snapshot_path)
+
             processed_count = 0
             failed_count = 0
             latest_checkpoint = checkpoint_before
@@ -68,6 +83,13 @@ class IndexingService:
                     failed_count += 1
                     last_failure_stage = JobFailureStage.NORMALIZE
                     error_messages.append(str(exc))
+                    failure_samples.append(
+                        self._build_failure_sample(
+                            stage=JobFailureStage.NORMALIZE,
+                            raw_record=raw_record,
+                            error=exc,
+                        )
+                    )
                     self.job_service.update_progress(job, processed_count=processed_count, failed_count=failed_count)
                     continue
 
@@ -91,34 +113,61 @@ class IndexingService:
                     failed_count += 1
                     last_failure_stage = self._failure_stage_for_exception(exc)
                     error_messages.append(str(exc))
+                    failure_samples.append(
+                        self._build_failure_sample(
+                            stage=last_failure_stage,
+                            raw_record=raw_record,
+                            payload=payload.model_dump(mode="json"),
+                            error=exc,
+                        )
+                    )
                     self.job_service.update_progress(job, processed_count=processed_count, failed_count=failed_count)
 
             if failed_count > 0:
                 summary = "; ".join(error_messages[:3]) if error_messages else "record processing failed"
-                return self.job_service.mark_failed(
+                failed_snapshot_path = self._archive_failed_records(source.id, job.id, failure_samples)
+                if failed_snapshot_path is not None:
+                    self.job_service.set_snapshot_path(job, failed_snapshot_path)
+                result = self.job_service.mark_failed(
                     job,
                     error_summary=f"{failed_count} record(s) failed: {summary}",
                     failed_count=failed_count,
                     failure_stage=last_failure_stage,
                 )
+                self._log_job_finished(result)
+                return result
 
             self._finalize_snapshot(source.id, is_full_snapshot, seen_external_doc_ids)
             if latest_checkpoint is not None:
                 self.checkpoint_repo.save(source.id, "default", str(latest_checkpoint))
             self.source_repo.touch_sync(source.id)
-            return self.job_service.mark_succeeded(
+            result = self.job_service.mark_succeeded(
                 job,
                 processed_count=processed_count,
                 failed_count=failed_count,
                 checkpoint_after=str(latest_checkpoint) if latest_checkpoint is not None else None,
             )
+            self._log_job_finished(result)
+            return result
         except Exception as exc:
-            return self.job_service.mark_failed(
+            failure_samples.append(
+                self._build_failure_sample(
+                    stage=JobFailureStage.PULL,
+                    error=exc,
+                    raw_record={"record_count": len(raw_records)},
+                )
+            )
+            failed_snapshot_path = self._archive_failed_records(source.id, job.id, failure_samples)
+            if failed_snapshot_path is not None:
+                self.job_service.set_snapshot_path(job, failed_snapshot_path)
+            result = self.job_service.mark_failed(
                 job,
                 error_summary=str(exc),
                 failed_count=job.failed_count,
                 failure_stage=JobFailureStage.PULL,
             )
+            self._log_job_finished(result)
+            return result
 
     def _pull_records(
         self,
@@ -218,6 +267,104 @@ class IndexingService:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    def _archive_raw_records(self, source_id: str, job_id: str, raw_records: list[Any]) -> str | None:
+        return self._archive_records(
+            object_name=f"raw/{source_id}/{job_id}/records.jsonl.gz",
+            records=raw_records,
+            archive_kind="raw",
+            source_id=source_id,
+            job_id=job_id,
+        )
+
+    def _archive_failed_records(self, source_id: str, job_id: str, failed_records: list[dict[str, Any]]) -> str | None:
+        if not failed_records:
+            return None
+        return self._archive_records(
+            object_name=f"failed/{source_id}/{job_id}/records.jsonl.gz",
+            records=failed_records,
+            archive_kind="failed",
+            source_id=source_id,
+            job_id=job_id,
+        )
+
+    def _archive_records(
+        self,
+        *,
+        object_name: str,
+        records: list[Any],
+        archive_kind: str,
+        source_id: str,
+        job_id: str,
+    ) -> str | None:
+        try:
+            return self.object_storage_repo.upload_jsonl_gz(object_name, records)
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "sync_archive_failed",
+                archive_kind=archive_kind,
+                error=str(exc),
+                job_id=job_id,
+                record_count=len(records),
+                source_id=source_id,
+            )
+            return None
+
+    def _build_failure_sample(
+        self,
+        *,
+        stage: JobFailureStage,
+        error: Exception,
+        raw_record: Any | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        sample: dict[str, Any] = {
+            "stage": stage.value,
+            "error_type": error.__class__.__name__,
+            "error_message": str(error),
+            "occurred_at": utcnow().isoformat(),
+        }
+        if raw_record is not None:
+            sample["raw_record"] = raw_record
+        if payload is not None:
+            sample["payload"] = payload
+        return sample
+
+    def _log_job_started(self, job: IndexJob) -> None:
+        log_event(
+            logger,
+            logging.INFO,
+            "sync_job_started",
+            checkpoint_before=job.checkpoint_before,
+            job_id=job.id,
+            mode=job.mode.value,
+            source_id=job.source_id,
+            status=job.status.value,
+        )
+
+    def _log_job_finished(self, job: IndexJob) -> None:
+        level = logging.INFO if job.status.value == "SUCCEEDED" else logging.WARNING
+        log_event(
+            logger,
+            level,
+            "sync_job_finished",
+            duration_ms=self._duration_ms(job),
+            failed_count=job.failed_count,
+            failure_stage=job.failure_stage.value if job.failure_stage else None,
+            job_id=job.id,
+            mode=job.mode.value,
+            processed_count=job.processed_count,
+            snapshot_path=job.snapshot_path,
+            source_id=job.source_id,
+            status=job.status.value,
+        )
+
+    def _duration_ms(self, job: IndexJob) -> int | None:
+        if job.started_at is None or job.finished_at is None:
+            return None
+        return max(int((job.finished_at - job.started_at).total_seconds() * 1000), 0)
 
 
 class EmbeddingStageError(RuntimeError):
