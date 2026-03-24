@@ -2,6 +2,18 @@
 
 `knowledge-indexer` 是企业知识库一期的索引与检索底座，职责聚焦在数据接入、知识处理、索引构建和内部检索/问答接口；对外业务接口、用户体系、权限体系仍由现有 Java 后端负责。
 
+## 文档导航
+
+为避免“项目入口说明”和“详细联调说明”混在一起，当前文档按三层职责划分：
+
+| 文档 | 角色 | 主要职责 |
+| --- | --- | --- |
+| `README.md` | 所有读者 | 说明项目定位、实现范围、快速启动入口与文档地图 |
+| `docs/use-cases.md` | 首次接触项目的研发、测试、联调同学 | 提供场景化使用手册，强调“按步骤操作后应看到什么结果” |
+| `docs/usage.md` | 接入开发、维护者 | 提供接口、配置、字段与限制的参考说明 |
+
+建议阅读顺序：先看 `README.md` 建立全局认知，再看 `docs/use-cases.md` 跑通案例，最后按需查阅 `docs/usage.md` 做字段和接口核对。
+
 ## 当前实现范围
 - FastAPI 内部接口：`/internal/sources`、`/internal/jobs/{id}`、`/internal/search`、`/internal/ask`、`/health`
 - 一期骨架能力：文件源 / API 源接入、同步任务、文本清洗切分、确定性哈希向量、ACL 过滤、证据不足兜底
@@ -16,6 +28,8 @@ uvicorn app.main:app --reload
 ```
 
 完整使用说明见 `docs/usage.md`。
+
+如果你要按业务场景联调，优先阅读 `docs/use-cases.md`；如果你要核对请求字段、环境变量和限制说明，再查 `docs/usage.md`。
 
 ## 环境变量
 复制 `.env.example` 为 `.env` 后按需修改：
