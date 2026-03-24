@@ -26,7 +26,8 @@
 - 依赖与风险点
 - 工作量估算
 
-### [ ] Step: 任务拆分
+### [x] Step: 任务拆分
+<!-- chat-id: b8b1e183-5254-41a3-8e14-d7f6a8d3b502 -->
 基于技术方案，将开发工作拆解为可执行的子任务。
 输出到 `{@artifacts_path}/tasks.md`，包含：
 - 子任务清单（每个任务明确：名称 / 负责模块 / 预估工作量 / 依赖关系）
@@ -40,6 +41,21 @@
 {子任务描述，包含关键实现要点}
 ```
 这样 To-do 面板会自动展示所有待执行的子任务。
+
+### [ ] Step: T1 共享基础能力与配置扩展
+统一扩展 `Settings`、`PipelineEngineInfo`、`JobStatus/IndexJob` 与 `ServiceContainer` 注入点，建立 LLM、rerank、pipeline engine、job runner 的默认配置和共享数据结构，保证兼容现有接口与 `SYNC_RUN_INLINE`。
+
+### [ ] Step: T2 问答链路编排与生成能力
+在 `qa_service` 中落地“检索 → 证据判定 → 可选 rerank → 生成/兜底”，新增 `answer_generator`、`rerank_service`，并扩展 `/internal/ask`、`/internal/search` 响应字段。
+
+### [ ] Step: T3 任务取消接口与执行器治理
+新增 `/internal/jobs/{job_id}/cancel`，实现 `PENDING/RUNNING` 的取消状态流转、后台执行模式和 `IndexingService` 检查点终止能力，保证幂等与兼容。
+
+### [ ] Step: T4 pipeline_engine 对外可观测化
+新增 `pipeline_engine` 解析服务，统一 `/health`、`/internal/ask`、`/internal/search`、`/internal/jobs/{id}` 的真实执行来源返回，并记录到任务对象。
+
+### [ ] Step: T5 文档与实现侧单测补齐
+补齐问答降级、rerank 降级、取消任务、健康检查等关键单测与文档说明，为后续 Code Review 和测试验证提供输入。
 
 ### [ ] Step: Code Review
 <!-- agent: codex-gpt-5-2-codex -->
