@@ -33,4 +33,4 @@ uvicorn app.main:app --reload
 
 ## 注意事项
 - 目前的 `HashEmbeddingService` 仅用于开发期跑通链路，不代表生产向量效果。
-- `PostgresConnector` 和真正的 CocoIndex Flow 已预留接口，后续可在不改 API 合同的情况下替换实现。
+- `PostgresConnector` 已支持真实 PostgreSQL 数据源拉取；CocoIndex Flow 仍保留为后续增强入口。

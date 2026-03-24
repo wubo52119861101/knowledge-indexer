@@ -40,6 +40,8 @@ class StubConnector(BaseConnector):
             doc_type=record.get("doc_type", "text"),
             metadata=dict(record.get("metadata") or {}),
             acl=[],
+            deleted=record.get("deleted", False),
+            checkpoint_value=record.get("checkpoint_value"),
         )
 
 
@@ -154,3 +156,54 @@ def test_full_sync_marks_missing_documents_deleted_and_clears_chunks() -> None:
     assert chunk_repo.list_by_document(stale_after_sync.id) == []
     assert fresh_after_sync.status.value == "ACTIVE"
     assert chunk_repo.list_by_document(fresh_after_sync.id) != []
+
+
+
+def test_incremental_deleted_record_marks_document_deleted_and_clears_chunks() -> None:
+    service, source_repo, document_repo, chunk_repo, checkpoint_repo, job_service = build_indexing_service()
+    source = source_repo.add(
+        Source(
+            id="src_1",
+            name="demo",
+            type=SourceType.POSTGRES,
+            config={"table": "knowledge_articles"},
+            sync_mode=SyncMode.INCREMENTAL,
+        )
+    )
+    existing_document = document_repo.upsert(
+        Document(
+            id=generate_id("doc"),
+            source_id=source.id,
+            external_doc_id="doc-1",
+            title="旧文档",
+            content_text="旧内容",
+            content_hash="old-hash",
+            doc_type="faq",
+            metadata={"updated_at": 10},
+        )
+    )
+    chunk_repo.replace_for_document(existing_document.id, service._build_chunks(existing_document))
+    checkpoint_repo.save(source.id, "default", "10|doc-0")
+
+    job = job_service.create_job(source_id=source.id, mode=SyncMode.INCREMENTAL, triggered_by="tester")
+    connector = StubConnector(
+        [
+            {
+                "external_doc_id": "doc-1",
+                "title": "旧文档",
+                "content": "",
+                "deleted": True,
+                "checkpoint_value": "20|doc-1",
+                "metadata": {"updated_at": 20, "deleted": True},
+            }
+        ]
+    )
+
+    result = service.run_job(source, job, connector)
+    deleted_document = next(document for document in document_repo.list_all() if document.external_doc_id == "doc-1")
+
+    assert result.status is JobStatus.SUCCEEDED
+    assert result.checkpoint_after == "20|doc-1"
+    assert checkpoint_repo.get(source.id, "default").checkpoint_value == "20|doc-1"
+    assert deleted_document.status.value == "DELETED"
+    assert chunk_repo.list_by_document(deleted_document.id) == []

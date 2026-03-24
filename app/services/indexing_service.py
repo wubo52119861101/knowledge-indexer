@@ -5,7 +5,7 @@ from typing import Any
 
 from app.connectors.base import BaseConnector
 from app.models.chunk import Chunk
-from app.models.common import AclEffect, AclType, EmbeddingStatus, JobFailureStage, SyncMode, generate_id, utcnow
+from app.models.common import AclEffect, AclType, DocumentStatus, EmbeddingStatus, JobFailureStage, SyncMode, generate_id, utcnow
 from app.models.document import Document, DocumentAcl
 from app.models.job import IndexJob
 from app.models.source import Source
@@ -74,13 +74,13 @@ class IndexingService:
                 try:
                     seen_external_doc_ids.add(payload.external_doc_id)
                     document = self._persist_document(source, payload)
-                    chunks = self._build_chunks(document)
-                    self.chunk_repo.replace_for_document(document.id, chunks)
+                    if payload.deleted:
+                        self.chunk_repo.replace_for_document(document.id, [])
+                    else:
+                        chunks = self._build_chunks(document)
+                        self.chunk_repo.replace_for_document(document.id, chunks)
                     processed_count += 1
-                    latest_checkpoint = self._max_checkpoint(
-                        latest_checkpoint,
-                        payload.metadata.get("updated_at") or utcnow().timestamp(),
-                    )
+                    latest_checkpoint = self._next_checkpoint(latest_checkpoint, payload)
                     self.job_service.update_progress(
                         job,
                         processed_count=processed_count,
@@ -145,6 +145,7 @@ class IndexingService:
                 content_hash=content_hash,
                 doc_type=payload.doc_type,
                 metadata=payload.metadata,
+                status=DocumentStatus.DELETED if payload.deleted else DocumentStatus.ACTIVE,
                 acl_entries=[
                     DocumentAcl(
                         acl_type=AclType(acl_item.type),
@@ -191,6 +192,14 @@ class IndexingService:
         if exc.__cause__ is not None and isinstance(exc.__cause__, EmbeddingStageError):
             return JobFailureStage.EMBED
         return JobFailureStage.PERSIST
+
+    def _next_checkpoint(self, current_value: str | float | int | None, payload) -> str | float | int | None:
+        if getattr(payload, "checkpoint_value", None) is not None:
+            return payload.checkpoint_value
+        return self._max_checkpoint(
+            current_value,
+            payload.metadata.get("updated_at") or utcnow().timestamp(),
+        )
 
     def _max_checkpoint(self, current_value: str | float | int | None, candidate_value: Any) -> str | float | int | None:
         if candidate_value is None:

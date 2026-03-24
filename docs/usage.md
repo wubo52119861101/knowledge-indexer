@@ -199,8 +199,8 @@ curl http://127.0.0.1:8000/health
 
 说明：
 
-- `file` 和 `api` 已可用于创建与同步
-- `postgres` 当前仅为接口占位，同步时会返回未实现错误
+- `file`、`api`、`postgres` 三类数据源均可创建与同步
+- `postgres` 支持连接校验、字段映射校验、全量 / 增量同步、删除标记与 ACL 映射
 
 ### 10.2 创建文件源
 
@@ -305,10 +305,59 @@ curl -X POST 'http://127.0.0.1:8000/internal/sources' \
 
 ### 10.4 创建 Postgres 源
 
-可以创建 `type=postgres` 的数据源，但当前仅用于预留二期能力。
+`postgres` 数据源要求 `config.connection_dsn`、`config.table`、`config.primary_key`、`config.content_column`、`config.updated_at_column` 已配置，创建时会立即校验连接和字段映射。
 
-- 创建接口可通过
-- 触发同步时会返回 `501 Not Implemented`
+示例请求：
+
+```bash
+curl -X POST 'http://127.0.0.1:8000/internal/sources' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Internal-Token: your-token' \
+  -d '{
+    "name": "PG 知识表",
+    "type": "postgres",
+    "config": {
+      "connection_dsn": "postgresql://demo:secret@127.0.0.1:5432/knowledge",
+      "schema": "public",
+      "table": "knowledge_articles",
+      "primary_key": "id",
+      "title_column": "title",
+      "content_column": "content",
+      "doc_type_column": "doc_type",
+      "updated_at_column": "updated_at",
+      "deleted_flag_column": "is_deleted",
+      "acl_columns": {
+        "roles": "visible_roles",
+        "departments": "visible_departments"
+      },
+      "metadata_columns": {
+        "biz_line": "biz_line",
+        "owner": "owner_name"
+      },
+      "where_clause": "status = 'ONLINE'",
+      "batch_size": 200
+    },
+    "sync_mode": "incremental",
+    "enabled": true
+  }'
+```
+
+字段说明：
+
+- `connection_dsn`：PostgreSQL 连接串，接口响应中会自动脱敏
+- `updated_at_column`：增量游标字段；`incremental` 模式下必填
+- `deleted_flag_column`：删除标记列，命中后会将文档置为 `DELETED` 并清空 chunk
+- `acl_columns`：ACL 字段映射，支持 `users` / `roles` / `departments` / `tags`
+- `metadata_columns`：元数据映射，key 为统一文档元数据字段名，value 为源表列名
+- `where_clause`：可选静态过滤条件，仅用于限定同步范围
+
+联调回归样例建议：
+
+1. 先创建 `postgres` 数据源
+2. 触发一次 `full` 同步，确认历史数据可落库
+3. 更新一条记录的 `updated_at` 与正文，再触发 `incremental`
+4. 将一条记录的 `is_deleted` 置为 `true`，再次触发 `incremental`
+5. 查询任务详情，确认 `checkpoint_after` 持续推进，且删除记录状态变为 `DELETED`
 
 ## 11. 查看数据源详情
 
@@ -550,9 +599,13 @@ python scripts/rebuild_index.py src_xxx --base-url http://127.0.0.1:8000 --token
 
 因为一期骨架先预留了配置与编排入口，真实持久化、队列和对象存储能力将在后续阶段接入。
 
-### 19.3 为什么 `postgres` 数据源不能同步？
+### 19.3 为什么 `postgres` 数据源创建时会失败？
 
-因为 `PostgresConnector` 当前仍是二期占位实现，同步时会抛出未实现错误。
+通常是以下原因：
+
+- `connection_dsn` 不合法，或数据库无法连通
+- `table` / `schema` / 列名配置错误，字段映射校验未通过
+- 选择了 `incremental` 模式，但没有配置 `updated_at_column`
 
 ### 19.4 为什么问答返回“当前证据不足”？
 
