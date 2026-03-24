@@ -11,6 +11,7 @@
 - 提供内部检索接口 `/internal/search`
 - 提供内部问答接口 `/internal/ask`
 - 提供任务查询接口 `/internal/jobs/{id}`
+- 提供任务取消接口 `/internal/jobs/{id}/cancel`
 - 提供健康检查接口 `/health`
 
 当前版本以“先跑通链路”为目标，默认使用内存仓储、文本切分与确定性哈希向量实现，便于本地验证和接口联调。
@@ -23,8 +24,9 @@
 - `api` 数据源创建与同步
 - `postgres` 数据源类型占位
 - 文本清洗、切 chunk、向量生成、检索、ACL 过滤
-- 证据不足时的问答兜底
-- 任务状态记录
+- 问答编排：`检索 -> 证据判定 -> 可选 rerank -> LLM 生成 / fallback`
+- 任务状态记录与取消治理
+- `pipeline_engine` 结构化出参
 
 当前未正式实现：
 
@@ -92,7 +94,15 @@ cp .env.example .env
 | `EMBEDDING_DIMENSION` | 哈希向量维度 | `64` |
 | `SEARCH_SCORE_THRESHOLD` | 检索最低分阈值 | `0.12` |
 | `MIN_EVIDENCE_COUNT` | 问答最少证据数 | `1` |
-| `SYNC_RUN_INLINE` | 是否在触发同步时同步执行任务 | `true` |
+| `SYNC_RUN_INLINE` | 旧版同步执行开关；未显式配置 `JOB_RUNNER_MODE` 时作为兼容兜底 | `true` |
+| `JOB_RUNNER_MODE` | 任务执行方式，支持 `inline` / `background` | 空 |
+| `LLM_ENABLED` | 是否启用 LLM 生成 | `false` |
+| `LLM_BASE_URL` | LLM 服务地址 | 空 |
+| `LLM_MODEL` | LLM 模型名 | 空 |
+| `RERANK_ENABLED` | 是否启用 rerank | `false` |
+| `RERANK_BASE_URL` | rerank 服务地址 | 空 |
+| `PIPELINE_ENGINE_TYPE` | 对外暴露的执行引擎类型，支持 `builtin` / `external` | `builtin` |
+| `PIPELINE_ENGINE_NAME` | 对外暴露的执行引擎名称 | `knowledge-indexer` |
 | `DATABASE_URL` | PostgreSQL 连接串，占位 | `postgresql://postgres:postgres@localhost:5432/knowledge_indexer` |
 | `REDIS_URL` | Redis 地址，占位 | `redis://localhost:6379/0` |
 | `MINIO_ENDPOINT` | MinIO 地址，占位 | `localhost:9000` |
@@ -183,9 +193,9 @@ curl http://127.0.0.1:8000/health
 - PostgreSQL 配置状态
 - Redis 配置状态
 - MinIO 配置状态
-- 模型实现状态
+- 当前服务默认暴露的 `pipeline_engine`
 
-注意：这里的 `database`、`redis`、`minio` 是“配置级健康检查”，表示参数是否已配置，不代表实际连接可用。
+注意：这里的 `database`、`redis`、`minio` 是“配置级健康检查”，表示参数是否已配置，不代表实际连接可用；`pipeline_engine` 表示服务默认配置态，不代表某个历史任务已经落库的实际执行来源。
 
 ## 10. 数据源管理
 
@@ -373,12 +383,13 @@ curl -X POST 'http://127.0.0.1:8000/internal/sources/src_xxx/sync' \
 
 ### 12.5 同步执行方式
 
-当前由环境变量 `SYNC_RUN_INLINE` 控制：
+当前由 `JOB_RUNNER_MODE` 控制；若未配置，则继续兼容 `SYNC_RUN_INLINE`：
 
-- `true`：接口收到请求后直接执行同步，适合本地调试
-- `false`：接口只创建任务，不会自动执行后台流程
+- `JOB_RUNNER_MODE=inline`：接口收到请求后直接执行同步，适合本地调试
+- `JOB_RUNNER_MODE=background`：接口先返回任务，再由进程内后台线程继续执行
+- 未设置 `JOB_RUNNER_MODE` 时：`SYNC_RUN_INLINE=true` 等价于 `inline`，`false` 等价于 `background`
 
-当前版本未接入后台任务队列，因此如果设置为 `false`，任务只会停留在创建状态，适合作为后续接入异步任务框架的占位模式。
+说明：当前后台模式使用进程内线程执行器，适合开发联调和取消流程验证，不等同于生产级分布式任务队列。
 
 ## 13. 查询任务状态
 
@@ -389,12 +400,34 @@ curl 'http://127.0.0.1:8000/internal/jobs/job_xxx' \
   -H 'X-Internal-Token: your-token'
 ```
 
+### 13.1 取消任务
+
+请求示例：
+
+```bash
+curl -X POST 'http://127.0.0.1:8000/internal/jobs/job_xxx/cancel' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Internal-Token: your-token' \
+  -d '{
+    "operator": "manual",
+    "reason": "manual cancel"
+  }'
+```
+
+返回约定：
+
+- `200`：取消成功，或任务已处于 `CANCELLING` / `CANCELLED`
+- `404`：任务不存在
+- `409`：任务已完成，不能再取消
+
 关键字段：
 
-- `status`：`PENDING` / `RUNNING` / `SUCCEEDED` / `FAILED`
+- `status`：`PENDING` / `RUNNING` / `CANCELLING` / `CANCELLED` / `SUCCEEDED` / `FAILED`
 - `processed_count`：成功处理文档数
 - `failed_count`：失败文档数
 - `error_summary`：错误摘要
+- `pipeline_engine`：该任务实际记录的执行来源
+- `cancel_requested_at` / `cancel_requested_by` / `cancel_reason`：取消审计信息
 - `started_at` / `finished_at`：任务执行时间
 
 ## 14. 检索接口
@@ -435,6 +468,11 @@ curl -X POST 'http://127.0.0.1:8000/internal/search' \
 
 ### 14.3 返回说明
 
+检索接口返回值除 `items` 外，还包含：
+
+- `pipeline_engine`：当前检索请求的执行来源描述
+- `rerank_applied`：是否实际执行了 rerank 排序
+
 每条检索结果包含：
 
 - `chunk_id`：片段 ID
@@ -474,16 +512,21 @@ curl -X POST 'http://127.0.0.1:8000/internal/ask' \
 
 问答接口返回：
 
-- `answer`：拼装后的回答文本
+- `answer`：最终回答文本
 - `citations`：引用片段列表
 - `evidence_status`：`SUFFICIENT` 或 `INSUFFICIENT`
-- `reason`：证据不足时的原因
+- `reason`：证据不足或降级原因
+- `answer_mode`：`generated` 或 `fallback`
+- `pipeline_engine`：当前问答请求的执行来源描述
+- `rerank_applied`：是否实际执行了 rerank 排序
 
-当前问答逻辑不是大模型生成，而是基于命中文本片段拼接结果：
+当前问答链路为：
 
 - 若命中数量少于 `MIN_EVIDENCE_COUNT`，返回证据不足
 - 若第一条结果分数低于 `SEARCH_SCORE_THRESHOLD`，返回证据不足
-- 否则拼装前几条检索结果作为回答
+- 若证据充足且启用了 LLM，则尝试基于证据生成答案
+- 若 LLM 未启用或调用失败，则返回可核验的 fallback 答案
+- 若 rerank 未启用、未配置或调用失败，则保持原始检索顺序
 
 ## 16. ACL 权限过滤说明
 
@@ -538,7 +581,7 @@ python scripts/rebuild_index.py src_xxx --base-url http://127.0.0.1:8000 --token
 4. 触发一次 `full` 同步
 5. 查询任务状态，确认 `SUCCEEDED`
 6. 调用 `/internal/search` 验证检索结果
-7. 调用 `/internal/ask` 验证问答兜底与引用输出
+7. 调用 `/internal/ask` 验证生成态 / fallback、引用输出和 `pipeline_engine` 字段
 
 ## 19. 常见问题
 
@@ -561,7 +604,23 @@ python scripts/rebuild_index.py src_xxx --base-url http://127.0.0.1:8000 --token
 - 检索命中文档数量不足
 - 最高分结果低于阈值 `SEARCH_SCORE_THRESHOLD`
 
-### 19.5 为什么内部接口返回 401？
+### 19.5 为什么问答没有走生成态，而是返回 fallback？
+
+通常有三类原因：
+
+- `LLM_ENABLED=false`
+- `LLM_BASE_URL` 或 `LLM_MODEL` 未配置完整
+- LLM 请求超时、异常或返回内容无法解析
+
+### 19.6 为什么 `rerank_applied=false`？
+
+通常有三类原因：
+
+- `RERANK_ENABLED=false`
+- `RERANK_BASE_URL` 未配置
+- rerank 服务请求失败或返回结果无法映射到已检索条目
+
+### 19.7 为什么内部接口返回 401？
 
 通常是：
 
@@ -578,7 +637,7 @@ python scripts/rebuild_index.py src_xxx --base-url http://127.0.0.1:8000 --token
 - 接入 MinIO 保存原始文件、失败样本与快照
 - 用 CocoIndex Flow 替换当前轻量索引流程
 - 实现 `postgres` 数据源增量同步
-- 引入 rerank 与真实 embedding 模型
+- 接入生产级 rerank 与真实 embedding 模型
 
 ## 21. 相关入口
 

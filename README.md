@@ -1,10 +1,13 @@
 # knowledge-indexer
 
-`knowledge-indexer` 是企业知识库一期的索引与检索底座，职责聚焦在数据接入、知识处理、索引构建和内部检索/问答接口；对外业务接口、用户体系、权限体系仍由现有 Java 后端负责。
+`knowledge-indexer` 是企业知识库一期的索引、检索与内部问答底座，职责聚焦在数据接入、知识处理、索引构建和内部接口编排；对外业务接口、用户体系、权限体系仍由现有 Java 后端负责。
 
 ## 当前实现范围
-- FastAPI 内部接口：`/internal/sources`、`/internal/jobs/{id}`、`/internal/search`、`/internal/ask`、`/health`
+- FastAPI 内部接口：`/internal/sources`、`/internal/jobs/{id}`、`/internal/jobs/{id}/cancel`、`/internal/search`、`/internal/ask`、`/health`
 - 一期骨架能力：文件源 / API 源接入、同步任务、文本清洗切分、确定性哈希向量、ACL 过滤、证据不足兜底
+- 问答链路：`检索 -> 证据判定 -> 可选 rerank -> LLM 生成 / fallback`，默认在未配置 LLM 或调用失败时回退到可靠兜底答案
+- 执行观测：`/health`、`/internal/search`、`/internal/ask`、任务详情均返回结构化 `pipeline_engine` 信息
+- 任务治理：支持 `PENDING` / `RUNNING` 任务取消，兼容 `inline` 与 `background` 两种执行方式
 - 默认使用内存仓储，便于本地快速验证；后续可无缝替换为 PostgreSQL + pgvector + Redis + MinIO + CocoIndex
 
 ## 快速启动
@@ -20,17 +23,24 @@ uvicorn app.main:app --reload
 ## 环境变量
 复制 `.env.example` 为 `.env` 后按需修改：
 - `INTERNAL_API_TOKEN`：内部接口鉴权 Token，留空则关闭校验
-- `SYNC_RUN_INLINE`：是否在触发同步时直接执行索引流程
+- `SYNC_RUN_INLINE`：旧版同步执行开关；未显式配置 `JOB_RUNNER_MODE` 时仍兼容此参数
+- `JOB_RUNNER_MODE`：任务执行方式，支持 `inline` / `background`
+- `LLM_ENABLED`、`LLM_BASE_URL`、`LLM_MODEL`：控制问答生成能力；未配置时自动走 fallback
+- `RERANK_ENABLED`、`RERANK_BASE_URL`：控制 rerank 能力；未配置或调用失败时保持原始检索顺序
+- `PIPELINE_ENGINE_TYPE`、`PIPELINE_ENGINE_NAME`：声明当前对外暴露的编排引擎信息
 - `DATABASE_URL` / `REDIS_URL` / `MINIO_*`：二期基础设施接入参数
 
 ## 架构说明
 - `app/api/`：内部 HTTP 接口
 - `app/connectors/`：文件源、API 源、数据库源连接器抽象
-- `app/services/`：索引、检索、问答、任务等核心业务逻辑
+- `app/services/`：索引、检索、问答、任务、rerank、pipeline engine 等核心业务逻辑
 - `app/repositories/`：一期内存仓储实现，预留持久化替换点
 - `app/flows/`：面向 CocoIndex 的流程封装占位
 - `docker/`：本地依赖编排与数据库初始化脚本
+- `tests/`：关键链路单测
 
 ## 注意事项
 - 目前的 `HashEmbeddingService` 仅用于开发期跑通链路，不代表生产向量效果。
+- `NoopAnswerGenerator` 与 `NoopRerankService` 是默认降级实现，用于未接入外部能力时保持接口稳定。
+- 后台模式当前使用进程内线程执行器，适合开发联调，不等同于生产级任务队列。
 - `PostgresConnector` 和真正的 CocoIndex Flow 已预留接口，后续可在不改 API 合同的情况下替换实现。

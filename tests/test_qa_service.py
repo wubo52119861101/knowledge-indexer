@@ -115,6 +115,29 @@ def test_qa_service_falls_back_when_llm_is_disabled() -> None:
     assert [item.chunk_id for item in answer.citations] == ["chk_1"]
 
 
+def test_qa_service_falls_back_when_llm_call_fails() -> None:
+    item = make_search_item("chk_1", 0.93, "退款到账通常需要 1 到 3 个工作日。", "退款时效")
+    qa_service = QaService(
+        settings=Settings(SEARCH_SCORE_THRESHOLD=0.2, MIN_EVIDENCE_COUNT=1),
+        retrieval_service=StubRetrievalService([item]),
+        answer_generator=StubAnswerGenerator(answer=None, enabled=True),
+        rerank_service=StubRerankService(applied=False),
+    )
+
+    answer = qa_service.ask(
+        question="退款多久到账",
+        top_k=5,
+        filters=SearchFilters(),
+        acl_context=AclContext(),
+    )
+
+    assert answer.answer_mode == "fallback"
+    assert answer.evidence_status == "SUFFICIENT"
+    assert answer.reason == "LLM 调用失败"
+    assert "已检索到相关依据" in answer.answer
+    assert [item.chunk_id for item in answer.citations] == ["chk_1"]
+
+
 def test_qa_service_search_returns_rerank_metadata() -> None:
     item_a = make_search_item("chk_a", 0.85, "第一条证据", "文档 A")
     item_b = make_search_item("chk_b", 0.83, "第二条证据", "文档 B")

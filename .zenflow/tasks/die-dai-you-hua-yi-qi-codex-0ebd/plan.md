@@ -58,7 +58,8 @@
 <!-- chat-id: b73acff4-ae86-466f-8224-5c6951297e6a -->
 新增 `pipeline_engine` 解析服务，统一 `/health`、`/internal/ask`、`/internal/search`、`/internal/jobs/{id}` 的真实执行来源返回，并记录到任务对象。
 
-### [ ] Step: T5 文档与实现侧单测补齐
+### [x] Step: T5 文档与实现侧单测补齐
+<!-- chat-id: 7c55c3f8-c19c-4e95-8537-935d1a169023 -->
 补齐问答降级、rerank 降级、取消任务、健康检查等关键单测与文档说明，为后续 Code Review 和测试验证提供输入。
 
 ### [ ] Step: Code Review
