@@ -22,4 +22,11 @@ async def internal_search(
         filters=payload.filters,
         acl_context=payload.acl_context,
     )
-    return success_response(request, SearchResponseData(items=items).model_dump(mode="json"))
+    return success_response(
+        request,
+        SearchResponseData(
+            items=items,
+            pipeline_engine=container.pipeline_engine_service.resolve("search"),
+            rerank_applied=False,
+        ).model_dump(mode="json"),
+    )

@@ -12,11 +12,15 @@ from app.repositories.chunk_repo import InMemoryChunkRepository
 from app.repositories.document_repo import InMemoryDocumentRepository
 from app.repositories.job_repo import InMemoryJobRepository
 from app.repositories.source_repo import InMemorySourceRepository
+from app.services.answer_generator import NoopAnswerGenerator
 from app.services.document_processor import DocumentProcessor
 from app.services.embedding_service import HashEmbeddingService
 from app.services.indexing_service import IndexingService
+from app.services.job_runner import JobRunner
 from app.services.job_service import JobService
+from app.services.pipeline_engine_service import PipelineEngineService
 from app.services.qa_service import QaService
+from app.services.rerank_service import NoopRerankService
 from app.services.retrieval_service import RetrievalService
 from app.services.source_service import SourceService
 
@@ -35,6 +39,10 @@ class ServiceContainer:
             chunk_overlap=settings.default_chunk_overlap,
         )
         self.embedding_service = HashEmbeddingService(dimension=settings.embedding_dimension)
+        self.pipeline_engine_service = PipelineEngineService(settings)
+        self.answer_generator = NoopAnswerGenerator(settings)
+        self.rerank_service = NoopRerankService(settings)
+        self.job_runner = JobRunner(settings)
         self.job_service = JobService(self.job_repo)
         self.source_service = SourceService(self.source_repo)
         self.indexing_service = IndexingService(
@@ -53,7 +61,13 @@ class ServiceContainer:
             embedding_service=self.embedding_service,
             min_score_threshold=settings.search_score_threshold,
         )
-        self.qa_service = QaService(settings=settings, retrieval_service=self.retrieval_service)
+        self.qa_service = QaService(
+            settings=settings,
+            retrieval_service=self.retrieval_service,
+            answer_generator=self.answer_generator,
+            rerank_service=self.rerank_service,
+            pipeline_engine_service=self.pipeline_engine_service,
+        )
 
         self._flows = {
             SourceType.FILE: FileIndexFlow(self.indexing_service),
@@ -68,7 +82,12 @@ class ServiceContainer:
         if not source.enabled:
             raise ValueError(f"source {source_id} is disabled")
 
-        job = self.job_service.create_job(source_id=source_id, mode=mode, triggered_by=operator)
+        job = self.job_service.create_job(
+            source_id=source_id,
+            mode=mode,
+            triggered_by=operator,
+            pipeline_engine=self.pipeline_engine_service.resolve("sync"),
+        )
         if self.settings.sync_run_inline:
             flow = self._flows[source.type]
             return flow.run(source, job)

@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
 
+from pydantic import BaseModel
+
 
 class SourceType(StrEnum):
     FILE = "file"
@@ -20,6 +22,8 @@ class SyncMode(StrEnum):
 class JobStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
+    CANCELLING = "CANCELLING"
+    CANCELLED = "CANCELLED"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
 
@@ -51,6 +55,22 @@ class AclEffect(StrEnum):
 class EvidenceStatus(StrEnum):
     SUFFICIENT = "SUFFICIENT"
     INSUFFICIENT = "INSUFFICIENT"
+
+
+class PipelineEngineType(StrEnum):
+    BUILTIN = "builtin"
+    EXTERNAL = "external"
+
+
+class JobRunnerMode(StrEnum):
+    INLINE = "inline"
+    BACKGROUND = "background"
+
+
+class PipelineEngineInfo(BaseModel):
+    type: PipelineEngineType
+    name: str
+    scene: str
 
 
 def utcnow() -> datetime:

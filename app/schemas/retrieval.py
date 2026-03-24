@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.common import EvidenceStatus
+from app.models.common import EvidenceStatus, PipelineEngineInfo
 
 
 class AclContext(BaseModel):
@@ -54,6 +54,8 @@ class SearchItem(BaseModel):
 
 class SearchResponseData(BaseModel):
     items: list[SearchItem]
+    pipeline_engine: PipelineEngineInfo
+    rerank_applied: bool = False
 
 
 class AskRequest(BaseModel):
@@ -68,3 +70,6 @@ class AskResponseData(BaseModel):
     citations: list[SearchItem]
     evidence_status: EvidenceStatus
     reason: str | None = None
+    answer_mode: Literal["generated", "fallback"] = "fallback"
+    pipeline_engine: PipelineEngineInfo
+    rerank_applied: bool = False

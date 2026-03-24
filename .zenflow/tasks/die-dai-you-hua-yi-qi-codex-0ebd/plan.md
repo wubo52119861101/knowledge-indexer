@@ -42,7 +42,8 @@
 ```
 这样 To-do 面板会自动展示所有待执行的子任务。
 
-### [ ] Step: T1 共享基础能力与配置扩展
+### [x] Step: T1 共享基础能力与配置扩展
+<!-- chat-id: 5f3d925a-e5b4-46dc-9db3-51674a4b17f9 -->
 统一扩展 `Settings`、`PipelineEngineInfo`、`JobStatus/IndexJob` 与 `ServiceContainer` 注入点，建立 LLM、rerank、pipeline engine、job runner 的默认配置和共享数据结构，保证兼容现有接口与 `SYNC_RUN_INLINE`。
 
 ### [ ] Step: T2 问答链路编排与生成能力

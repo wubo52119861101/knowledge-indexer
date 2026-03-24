@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.models.common import JobStatus, SyncMode
+from app.models.common import JobStatus, PipelineEngineInfo, SyncMode
 
 
 class JobItem(BaseModel):
@@ -17,6 +17,10 @@ class JobItem(BaseModel):
     failed_count: int
     error_summary: str | None = None
     snapshot_path: str | None = None
+    pipeline_engine: PipelineEngineInfo | None = None
+    cancel_requested_at: datetime | None = None
+    cancel_requested_by: str | None = None
+    cancel_reason: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     created_at: datetime
