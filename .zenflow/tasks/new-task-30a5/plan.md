@@ -59,7 +59,7 @@
 - 支持删除标记、ACL 字段、metadata 字段映射到统一文档结构
 - 至少有一份联调样例可用于回归
 
-### [ ] Step: T4 检索与问答链路增强
+### [x] Step: T4 检索与问答链路增强
 接入真实 embedding，改造检索链路：
 - 向量从 HashEmbeddingService 迁移到真实 embedding provider
 - 数据读取从内存遍历迁移为 PostgreSQL + pgvector 检索

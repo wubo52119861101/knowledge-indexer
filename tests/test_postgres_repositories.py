@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 
+from app.core.database import from_pgvector
 from app.core.config import Settings
 from app.core.container import ServiceContainer
+from app.core.utils import cosine_similarity
 from app.models.chunk import Chunk
 from app.models.common import DocumentStatus, EmbeddingStatus, JobStatus, SourceType, SyncMode, generate_id, utcnow
 from app.models.document import Document
@@ -14,6 +17,7 @@ from app.repositories.chunk_repo import PostgresChunkRepository
 from app.repositories.document_repo import PostgresDocumentRepository
 from app.repositories.job_repo import PostgresJobRepository
 from app.repositories.source_repo import PostgresSourceRepository
+from app.schemas.retrieval import SearchFilters
 
 
 @dataclass
@@ -216,6 +220,42 @@ class FakePostgresState:
 
         if "from kb_chunks order by created_at asc, chunk_index asc" in normalized:
             return sorted(self.chunks.values(), key=lambda item: (item["created_at"], item["chunk_index"]))
+
+        if "from kb_chunks" in normalized and "1 - (embedding <=> %s::vector) as score" in normalized:
+            query_embedding = from_pgvector(params[0])
+            limit = int(params[-1])
+            rows = [row for row in self.chunks.values() if row["embedding_status"] == EmbeddingStatus.DONE.value]
+
+            cursor = 2
+            if "metadata_json ->> 'source_id' in (" in normalized:
+                source_count = normalized.count("metadata_json ->> 'source_id'")
+                source_ids = list(params[cursor : cursor + source_count])
+                cursor += source_count
+                rows = [row for row in rows if row["metadata_json"].get("source_id") in source_ids]
+
+            if "metadata_json ->> 'doc_type' in (" in normalized:
+                doc_type_count = normalized.count("metadata_json ->> 'doc_type'")
+                doc_types = list(params[cursor : cursor + doc_type_count])
+                cursor += doc_type_count
+                rows = [row for row in rows if row["metadata_json"].get("doc_type") in doc_types]
+
+            if "metadata_json @> %s::jsonb" in normalized:
+                metadata_filter = params[cursor]
+                cursor += 1
+                expected_pairs = json.loads(metadata_filter) if isinstance(metadata_filter, str) else {}
+                rows = [
+                    row
+                    for row in rows
+                    if all(row["metadata_json"].get(key) == value for key, value in expected_pairs.items())
+                ]
+
+            scored_rows = []
+            for row in rows:
+                score = cosine_similarity(query_embedding, from_pgvector(row["embedding"]))
+                scored_rows.append({**row, "score": score})
+
+            scored_rows.sort(key=lambda item: item["score"], reverse=True)
+            return scored_rows[:limit]
 
         raise AssertionError(f"unexpected query: {normalized}")
 
@@ -434,6 +474,47 @@ def test_postgres_chunk_repository_replace_for_document() -> None:
     assert [chunk.id for chunk in chunks] == ["chk_3"]
     assert chunks[0].embedding == [0.9, 0.8]
     assert len(repo.list_all()) == 1
+
+
+def test_postgres_chunk_repository_search_candidates() -> None:
+    factory = FakeConnectionFactory()
+    repo = PostgresChunkRepository(factory)
+    repo.replace_for_document(
+        "doc_1",
+        [
+            Chunk(
+                id="chk_1",
+                document_id="doc_1",
+                chunk_index=0,
+                content="退款七天内可申请",
+                summary=None,
+                token_count=4,
+                metadata={"source_id": "src_1", "doc_type": "faq", "lang": "zh"},
+                embedding=[1.0, 0.0],
+                embedding_status=EmbeddingStatus.DONE,
+            ),
+            Chunk(
+                id="chk_2",
+                document_id="doc_2",
+                chunk_index=0,
+                content="英文说明",
+                summary=None,
+                token_count=2,
+                metadata={"source_id": "src_2", "doc_type": "manual", "lang": "en"},
+                embedding=[0.0, 1.0],
+                embedding_status=EmbeddingStatus.DONE,
+            ),
+        ],
+    )
+
+    candidates = repo.search_candidates(
+        query_embedding=[1.0, 0.0],
+        filters=SearchFilters(source_ids=["src_1"], doc_types=["faq"], metadata={"lang": "zh"}),
+        limit=5,
+    )
+
+    assert [item.chunk.id for item in candidates] == ["chk_1"]
+    assert candidates[0].score > 0.99
 
 
 def test_service_container_switches_to_postgres_backend() -> None:

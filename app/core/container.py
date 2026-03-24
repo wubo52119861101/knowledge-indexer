@@ -14,7 +14,7 @@ from app.repositories.document_repo import InMemoryDocumentRepository, PostgresD
 from app.repositories.job_repo import InMemoryJobRepository, PostgresJobRepository
 from app.repositories.source_repo import InMemorySourceRepository, PostgresSourceRepository
 from app.services.document_processor import DocumentProcessor
-from app.services.embedding_service import HashEmbeddingService
+from app.services.embedding_service import build_embedding_service
 from app.services.indexing_service import IndexingService
 from app.services.job_service import JobService
 from app.services.qa_service import QaService
@@ -34,7 +34,7 @@ class ServiceContainer:
             chunk_size=settings.default_chunk_size,
             chunk_overlap=settings.default_chunk_overlap,
         )
-        self.embedding_service = HashEmbeddingService(dimension=settings.embedding_dimension)
+        self.embedding_service = build_embedding_service(settings)
         self.job_service = JobService(self.job_repo)
         self.source_service = SourceService(self.source_repo)
         self.indexing_service = IndexingService(
@@ -52,6 +52,7 @@ class ServiceContainer:
             chunk_repo=self.chunk_repo,
             embedding_service=self.embedding_service,
             min_score_threshold=settings.search_score_threshold,
+            candidate_multiplier=settings.retrieval_candidate_multiplier,
         )
         self.qa_service = QaService(settings=settings, retrieval_service=self.retrieval_service)
 
