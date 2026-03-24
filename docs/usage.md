@@ -416,15 +416,19 @@ curl 'http://127.0.0.1:8000/internal/jobs/job_xxx' \
 
 ## 14. 检索接口
 
-### 14.1 请求示例
+`/internal/search` 用于验证“知识是否已成功入库、过滤条件是否生效、当前用户是否有权看到结果”。
+
+接口返回的是通过 `filters` 与 `acl_context` 双重过滤后的知识片段列表，不会返回整篇文档。
+
+### 14.1 典型场景：按分类和权限搜索知识片段
 
 ```bash
 curl -X POST 'http://127.0.0.1:8000/internal/search' \
   -H 'Content-Type: application/json' \
   -H 'X-Internal-Token: your-token' \
   -d '{
-    "query": "如何申请请假",
-    "top_k": 5,
+    "query": "请假流程是什么",
+    "top_k": 3,
     "filters": {
       "source_ids": [],
       "doc_types": ["md", "faq"],
@@ -441,30 +445,72 @@ curl -X POST 'http://127.0.0.1:8000/internal/search' \
   }'
 ```
 
-### 14.2 字段说明
+典型返回：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "items": [
+      {
+        "chunk_id": "chk_1234567890ab",
+        "document_id": "doc_1234567890ab",
+        "score": 0.8231,
+        "content": "请假需提前在系统提交审批，三天以上需部门负责人审批。",
+        "source": {
+          "source_id": "src_1234567890ab",
+          "source_type": "api"
+        },
+        "document": {
+          "title": "请假制度",
+          "external_id": "faq-001"
+        },
+        "citation": {
+          "doc_title": "请假制度",
+          "chunk_index": 0
+        }
+      }
+    ]
+  },
+  "request_id": "req_xxxxxxxxxxxx"
+}
+```
+
+### 14.2 关键字段说明
 
 - `query`：检索问题
 - `top_k`：返回前 N 条，范围 `1-20`
-- `filters.source_ids`：按数据源过滤
-- `filters.doc_types`：按文档类型过滤
-- `filters.metadata`：按文档元数据键值过滤
-- `acl_context`：检索时用于权限过滤的上下文
+- `filters.source_ids`：按数据源过滤；为空表示不过滤
+- `filters.doc_types`：按文档类型过滤；为空表示不过滤
+- `filters.metadata`：按文档元数据键值做“精确匹配”，多个键之间是“且”关系
+- `acl_context`：检索时用于权限过滤的上下文；只有命中 ACL 规则的文档才会出现在结果中
 
-### 14.3 返回说明
+### 14.3 返回结果如何解读
 
 每条检索结果包含：
 
 - `chunk_id`：片段 ID
 - `document_id`：文档 ID
-- `score`：检索分数
-- `content`：片段内容
+- `score`：检索分数，越高表示当前 query 与片段越接近；更适合在同一次请求内做相对比较
+- `content`：片段内容，不一定是整篇文档全文
 - `source`：来源数据源信息
 - `document`：文档标题与外部 ID
-- `citation`：引用信息
+- `citation`：引用信息，供问答结果或调用方回溯片段出处
+
+联调建议：
+
+1. 先用空 `filters` 和空 `acl_context` 验证“是否有任何命中”；
+2. 再逐步添加 `metadata`、`doc_types` 和 `acl_context`，定位到底是过滤条件还是权限导致结果减少；
+3. 若同一 query 在两次调用中的 `items` 差异较大，优先比较 `filters` 与 `acl_context` 是否完全一致。
 
 ## 15. 问答接口
 
-### 15.1 请求示例
+`/internal/ask` 会先执行一次与 `/internal/search` 相同的检索，再根据证据数量和最高分判断是否可以返回答案。
+
+当前问答逻辑不是大模型自由生成，而是“检索命中后，把前几条片段拼成答案”；因此你看到的答案质量，直接取决于检索结果质量。
+
+### 15.1 命中充分示例
 
 ```bash
 curl -X POST 'http://127.0.0.1:8000/internal/ask' \
@@ -487,20 +533,102 @@ curl -X POST 'http://127.0.0.1:8000/internal/ask' \
   }'
 ```
 
-### 15.2 返回说明
+典型返回：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "answer": "根据知识库检索结果，可确认以下信息：\n- 请假需提前在系统提交审批。\n- 三天以上请假需部门负责人审批。",
+    "citations": [
+      {
+        "chunk_id": "chk_1234567890ab",
+        "document_id": "doc_1234567890ab",
+        "score": 0.8231,
+        "content": "请假需提前在系统提交审批。",
+        "source": {
+          "source_id": "src_1234567890ab",
+          "source_type": "api"
+        },
+        "document": {
+          "title": "请假制度",
+          "external_id": "faq-001"
+        },
+        "citation": {
+          "doc_title": "请假制度",
+          "chunk_index": 0
+        }
+      }
+    ],
+    "evidence_status": "SUFFICIENT",
+    "reason": null
+  },
+  "request_id": "req_xxxxxxxxxxxx"
+}
+```
+
+### 15.2 证据不足示例
+
+```bash
+curl -X POST 'http://127.0.0.1:8000/internal/ask' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Internal-Token: your-token' \
+  -d '{
+    "question": "公司上市后的股权结构是什么",
+    "top_k": 5,
+    "filters": {
+      "source_ids": [],
+      "doc_types": [],
+      "metadata": {}
+    },
+    "acl_context": {
+      "user_id": "u1001",
+      "roles": ["employee"],
+      "departments": [],
+      "tags": []
+    }
+  }'
+```
+
+一种常见返回如下：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "answer": "当前证据不足，暂时无法给出可靠答案。",
+    "citations": [],
+    "evidence_status": "INSUFFICIENT",
+    "reason": "检索命中数量不足"
+  },
+  "request_id": "req_xxxxxxxxxxxx"
+}
+```
+
+如果存在少量命中，但第一条结果分数低于 `SEARCH_SCORE_THRESHOLD`，则也会返回 `INSUFFICIENT`，此时 `reason` 为 `检索分数低于阈值`。
+
+### 15.3 返回说明与联调判读
 
 问答接口返回：
 
-- `answer`：拼装后的回答文本
-- `citations`：引用片段列表
+- `answer`：拼装后的回答文本；当前实现会把最多前 3 条检索片段按模板拼接
+- `citations`：引用片段列表，结构与 `/internal/search` 的单条结果一致
 - `evidence_status`：`SUFFICIENT` 或 `INSUFFICIENT`
 - `reason`：证据不足时的原因
 
-当前问答逻辑不是大模型生成，而是基于命中文本片段拼接结果：
+当前问答逻辑的核心判断规则是：
 
 - 若命中数量少于 `MIN_EVIDENCE_COUNT`，返回证据不足
 - 若第一条结果分数低于 `SEARCH_SCORE_THRESHOLD`，返回证据不足
 - 否则拼装前几条检索结果作为回答
+
+联调时建议这样看结果：
+
+1. `/internal/search` 已经无结果时，`/internal/ask` 通常也会直接进入证据不足；
+2. `/internal/search` 有结果但 `/internal/ask` 仍为 `INSUFFICIENT` 时，优先检查 `MIN_EVIDENCE_COUNT` 与 `SEARCH_SCORE_THRESHOLD`；
+3. `citations` 里返回的就是问答使用过的证据片段，调用方可直接用于“答案引用来源”展示。
 
 ## 16. ACL 权限过滤说明
 
@@ -516,7 +644,70 @@ curl -X POST 'http://127.0.0.1:8000/internal/ask' \
 - `allow`
 - `deny`
 
-检索时通过 `acl_context` 参与过滤。典型集成方式为：
+检索时通过 `acl_context` 参与过滤。当前实现是“先按 `filters` 过滤文档，再执行 ACL 判定”。
+
+### 16.1 ACL 数据格式
+
+文档侧 ACL 示例：
+
+```json
+[
+  {
+    "type": "role",
+    "value": "employee",
+    "effect": "allow"
+  },
+  {
+    "type": "department",
+    "value": "outsource",
+    "effect": "deny"
+  }
+]
+```
+
+请求侧 `acl_context` 示例：
+
+```json
+{
+  "user_id": "u1001",
+  "roles": ["employee"],
+  "departments": ["hr"],
+  "tags": ["beta"]
+}
+```
+
+### 16.2 判定规则（与代码实现一致）
+
+1. 文档没有任何 ACL 条目时，视为公开文档，任何人都可检索到；
+2. 只要存在任意一条 `deny` 规则与 `acl_context` 命中，文档直接不可见；
+3. 如果文档只有 `deny` 规则，且当前用户没有命中任何 `deny`，则文档可见；
+4. 如果文档存在 `allow` 规则，则至少命中一条 `allow` 才可见；
+5. 同一种效果下是“或”关系，不是“且”关系：例如同时配置 `allow role=employee` 和 `allow department=hr`，命中其中任意一条即可通过。
+
+### 16.3 ACL 联调案例
+
+假设你的知识源里有以下 5 篇文档：
+
+| 文档标题 | ACL 配置 | 说明 |
+| --- | --- | --- |
+| `请假制度` | `allow role=employee` | 普通员工可见 |
+| `HR 操作手册` | `allow department=hr` | 仅 HR 部门可见 |
+| `财务周报` | `allow user=u2002` | 仅指定用户可见 |
+| `Beta 发布说明` | `allow tag=beta` | 仅带指定标签的用户可见 |
+| `外包流程` | `allow role=employee` + `deny department=outsource` | 员工默认可见，但外包部门强制不可见 |
+
+可以用同一条 query 连续发起多次 `/internal/search`，只替换 `acl_context`，预期结果如下：
+
+| 场景 | `acl_context` 重点字段 | 预期可见文档 |
+| --- | --- | --- |
+| 场景 A：普通 HR 员工 | `roles=[employee]`、`departments=[hr]` | `请假制度`、`HR 操作手册`、`外包流程` |
+| 场景 B：外包员工 | `roles=[employee]`、`departments=[outsource]` | `请假制度`；`外包流程` 会因 `deny department=outsource` 被过滤 |
+| 场景 C：指定用户且带 Beta 标签 | `user_id=u2002`、`tags=[beta]` | `财务周报`、`Beta 发布说明` |
+| 场景 D：未传任何权限上下文 | `user_id=null`、`roles=[]`、`departments=[]`、`tags=[]` | 只能看到无 ACL 的公开文档；所有带 `allow` 的文档都会被过滤 |
+
+这组案例覆盖了 `user`、`role`、`department`、`tag` 四类 ACL，以及 `allow` / `deny` 的优先级关系。
+
+典型集成方式为：
 
 1. Java 后端完成登录态与权限解析
 2. Java 将用户角色、部门、标签等信息传给 `knowledge-indexer`
