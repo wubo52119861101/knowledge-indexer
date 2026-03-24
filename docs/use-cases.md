@@ -285,3 +285,340 @@ cp .env.example .env
 - 想继续验证“数据是怎么进来的”，看后续数据源接入与同步案例；
 - 想先核对接口字段、请求体和环境变量，查阅 `docs/usage.md`；
 - 想快速理解完整链路，优先关注“创建数据源 → 触发同步 → 查询任务 → 检索 / 问答”这条主路径。
+
+## 7. 数据源接入与同步案例
+
+本章聚焦“知识是怎么进入系统的”。你只要顺着下面 4 个案例操作，就能理解一期版本最核心的接入链路：
+- 先创建数据源，让系统知道内容从哪里来；
+- 再触发同步任务，把原始内容加工为可检索的文档和切片；
+- 最后查询任务结果，判断本次同步到底有没有真正执行成功。
+
+开始前先记住两个容易混淆的事实：
+- 创建数据源只会保存配置，不会自动开始索引；
+- `/internal/sources/{source_id}/sync` 一定会先创建任务，但任务是否立刻执行，取决于 `SYNC_RUN_INLINE`。
+
+### 7.1 案例一：创建文件数据源并执行全量同步
+
+#### 场景目标
+
+通过一个本地目录完成“文件接入 → 全量同步 → 任务确认”整条路径，建立对 `file` 数据源的直观认知。
+
+#### 适用角色
+
+- 本地验证索引链路的研发同学；
+- 需要准备回归样例文档的测试同学；
+- 想先避开外部依赖、快速跑通同步流程的联调同学。
+
+#### 前置条件
+
+- 已按第 6 章完成服务启动；
+- 知道当前服务地址，例如 `http://127.0.0.1:8000`；
+- 如果 `.env` 中配置了 `INTERNAL_API_TOKEN`，后续请求需携带 `X-Internal-Token`；
+- 当前示例假设 `SYNC_RUN_INLINE=true`，这样同步请求发出后会直接在当前进程内执行。
+
+#### 操作步骤
+
+1. 准备一个本地示例目录。为了不污染仓库，建议直接用 `/tmp`：
+
+   ```bash
+   export DOC_ROOT=/tmp/knowledge-indexer-demo-docs
+   mkdir -p "$DOC_ROOT/policies"
+
+   cat > "$DOC_ROOT/policies/leave.md" <<'EOF'
+   请假制度
+
+   员工请假需提前在系统中提交申请，并由直属主管审批。
+   EOF
+
+   cat > "$DOC_ROOT/security.txt" <<'EOF'
+   办公安全要求：离开工位前请锁屏，敏感资料不要明文外发。
+   EOF
+   ```
+
+2. 创建 `file` 数据源：
+
+   ```bash
+   curl -X POST 'http://127.0.0.1:8000/internal/sources' \
+     -H 'Content-Type: application/json' \
+     -H 'X-Internal-Token: your-token' \
+     -d '{
+       "name": "本地示例文档目录",
+       "type": "file",
+       "config": {
+         "root_path": "/tmp/knowledge-indexer-demo-docs",
+         "file_patterns": ["**/*.md", "**/*.txt"]
+       },
+       "sync_mode": "incremental",
+       "enabled": true
+     }'
+   ```
+
+   如果你的 `INTERNAL_API_TOKEN` 为空，可以删除 `X-Internal-Token` 请求头。
+
+3. 从响应中记录 `data.id`，后文记为 `SOURCE_ID`。成功响应会类似：
+
+   ```json
+   {
+     "code": 0,
+     "message": "ok",
+     "data": {
+       "id": "src_1234567890ab",
+       "name": "本地示例文档目录",
+       "type": "file",
+       "sync_mode": "incremental",
+       "enabled": true,
+       "last_sync_at": null
+     }
+   }
+   ```
+
+4. 触发一次全量同步：
+
+   ```bash
+   curl -X POST 'http://127.0.0.1:8000/internal/sources/SOURCE_ID/sync' \
+     -H 'Content-Type: application/json' \
+     -H 'X-Internal-Token: your-token' \
+     -d '{
+       "mode": "full",
+       "operator": "manual"
+     }'
+   ```
+
+5. 从响应中记录 `data.job_id`，后文记为 `JOB_ID`。如果当前是默认的 `SYNC_RUN_INLINE=true`，这里通常会直接看到：
+
+   ```json
+   {
+     "code": 0,
+     "message": "ok",
+     "data": {
+       "job_id": "job_1234567890ab",
+       "status": "SUCCEEDED",
+       "queued_at": "2026-03-24T10:30:00Z"
+     }
+   }
+   ```
+
+6. 再查询一次任务详情，确认不是“任务创建成功但实际没跑”：
+
+   ```bash
+   curl 'http://127.0.0.1:8000/internal/jobs/JOB_ID' \
+     -H 'X-Internal-Token: your-token'
+   ```
+
+#### 预期结果
+
+- 创建数据源成功时，响应中的 `data.type=file`，`data.id` 为后续所有操作的主键；
+- 触发全量同步后，若目录下有 2 个文件，任务详情中通常应看到 `status=SUCCEEDED` 且 `processed_count=2`；
+- 任务详情中的 `triggered_by` 会映射为你在同步请求里传入的 `operator`；
+- 查询 `GET /internal/sources/SOURCE_ID` 时，返回中的 `latest_job` 应能看到最近一次同步任务摘要。
+
+#### 常见问题 / 注意事项
+
+- `file` 数据源只在创建时校验 `config.root_path` 是否存在，不会帮你自动创建目录；
+- 全量同步会把当前扫描结果视为最新快照，如果后续删除了目录中的某些文件，再次执行 `full` 时，这些缺失文档会被标记为删除；
+- 如果你传了不存在的 `root_path`，创建接口会返回 `400`，错误信息为 `file source requires config.root_path`；
+- 如果响应中的 `status` 不是 `SUCCEEDED`，以 `/internal/jobs/{job_id}` 查到的 `error_summary` 为准做排查。
+
+### 7.2 案例二：创建 API 数据源并执行增量同步
+
+#### 场景目标
+
+理解 `api` 数据源如何接入外部知识接口，以及增量同步为什么依赖 `updated_at` 和 `checkpoint`。
+
+#### 适用角色
+
+- 对接外部知识平台、内容中心或 FAQ 服务的研发同学；
+- 需要验证增量拉取协议的联调同学；
+- 需要确认 ACL 元数据是否能透传进入文档索引的测试同学。
+
+#### 前置条件
+
+- 已有一个可访问的 HTTP 接口，例如 `http://127.0.0.1:9000/mock/knowledge`；
+- 该接口返回格式必须满足下面两种之一：直接返回数组，或返回对象且对象中包含 `items` 数组；
+- 如果你要验证真正的增量行为，返回项里应提供可比较的新旧值，例如 `updated_at`。
+
+推荐的返回样例如下：
+
+```json
+{
+  "items": [
+    {
+      "external_doc_id": "faq-001",
+      "title": "请假制度",
+      "content": "请假需提前在系统提交审批。",
+      "doc_type": "faq",
+      "updated_at": "2026-03-24T09:00:00Z",
+      "metadata": {
+        "category": "hr"
+      },
+      "acl": [
+        {
+          "type": "role",
+          "value": "employee",
+          "effect": "allow"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### 操作步骤
+
+1. 创建 `api` 数据源：
+
+   ```bash
+   curl -X POST 'http://127.0.0.1:8000/internal/sources' \
+     -H 'Content-Type: application/json' \
+     -H 'X-Internal-Token: your-token' \
+     -d '{
+       "name": "知识接口",
+       "type": "api",
+       "config": {
+         "base_url": "http://127.0.0.1:9000/mock/knowledge",
+         "params": {
+           "scene": "faq"
+         }
+       },
+       "sync_mode": "incremental",
+       "enabled": true
+     }'
+   ```
+
+2. 记录返回中的 `data.id`，后文记为 `API_SOURCE_ID`。
+
+3. 先执行第一次增量同步：
+
+   ```bash
+   curl -X POST 'http://127.0.0.1:8000/internal/sources/API_SOURCE_ID/sync' \
+     -H 'Content-Type: application/json' \
+     -H 'X-Internal-Token: your-token' \
+     -d '{
+       "mode": "incremental",
+       "operator": "manual"
+     }'
+   ```
+
+4. 记录返回中的 `job_id`，再调用 `/internal/jobs/{job_id}` 查看结果。
+
+5. 如果你的 mock 接口支持打印请求参数，再执行第二次增量同步，观察它是否收到自动附加的 `checkpoint` 查询参数。
+
+#### 预期结果
+
+- 创建成功时，返回中的 `data.type=api`，`config.base_url` 会按原值保存；
+- 第一次增量同步在没有历史检查点时，会直接按当前接口返回的数据处理；
+- 成功任务会把本次处理记录中最大的 `updated_at` 保存为检查点；
+- 第二次增量同步时，系统会自动向 `base_url` 附加 `checkpoint` 参数，用于让上游只返回新增或变更的数据；
+- 如果返回项里包含 `acl`，这些权限条目会写入文档 ACL，供后续检索/问答过滤使用。
+
+#### 常见问题 / 注意事项
+
+- `api` 数据源创建时只强制要求 `config.base_url`，并不会在创建阶段校验远端接口真的可用；
+- 如果接口返回的既不是数组，也不是带 `items` 的对象，同步任务会失败，`error_summary` 中会出现 `API source response must be a list or an object with 'items'`；
+- `updated_at` 最好使用可比较的时间戳或 ISO 时间字符串，否则你很难判断增量边界是否符合预期；
+- 当前检查点保存在内存仓储中，服务重启后会丢失，所以本地验证增量行为时不要在两次同步之间重启应用。
+
+### 7.3 案例三：查看任务结果并理解 `SYNC_RUN_INLINE`
+
+#### 场景目标
+
+明确“同步请求返回了，不等于同步已经执行完成”，避免把当前版本的占位模式误判为系统故障。
+
+#### 适用角色
+
+- 联调任务状态接口的研发与测试同学；
+- 需要区分“已执行完成”和“仅创建任务”的项目同学。
+
+#### 前置条件
+
+- 已至少创建过一个可用的数据源；
+- 知道当前 `.env` 中 `SYNC_RUN_INLINE` 的值；
+- 如果你要验证两种模式的差异，修改 `.env` 后需要重启 `uvicorn` 进程。
+
+#### 操作步骤
+
+1. 保持 `SYNC_RUN_INLINE=true`，触发任意一次文件源或 API 源同步。
+2. 观察 `/internal/sources/{source_id}/sync` 的直接返回值，再查询 `/internal/jobs/{job_id}`。
+3. 将 `.env` 中的 `SYNC_RUN_INLINE` 改为 `false`，重启服务。
+4. 用同一个数据源再触发一次同步，并再次查询任务详情。
+
+#### 预期结果
+
+- 当 `SYNC_RUN_INLINE=true` 时，同步接口返回的 `data.status` 往往已经是最终态，例如 `SUCCEEDED` 或 `FAILED`；
+- 当 `SYNC_RUN_INLINE=false` 时，同步接口仍会返回 `code=0`，但 `data.status` 只会是 `PENDING`；
+- 在 `SYNC_RUN_INLINE=false` 的情况下，当前版本不会自动消费后台任务，所以 `/internal/jobs/{job_id}` 中通常会持续看到：
+  - `status=PENDING`
+  - `started_at=null`
+  - `finished_at=null`
+- 对当前一期版本来说，任务结果是否可信，应该以 `GET /internal/jobs/{job_id}` 返回的字段为准，而不是只看触发接口是否返回 `200`。
+
+#### 常见问题 / 注意事项
+
+- `PENDING` 不一定代表卡住，也可能只是你主动启用了“仅创建任务、不内联执行”的占位模式；
+- 当前版本还没有接入真正的队列消费者，所以把 `SYNC_RUN_INLINE` 设为 `false` 后，不会有人替你把任务从 `PENDING` 推进到 `RUNNING`；
+- 如果你只是本地联调，建议保持默认值 `true`，否则很容易误以为同步链路失效。
+
+### 7.4 案例四：创建 `postgres` 数据源并识别一期占位边界
+
+#### 场景目标
+
+帮助你正确理解 `postgres` 类型当前“可创建、不可用作真实同步”的状态，避免把二期预留能力当成一期缺陷。
+
+#### 适用角色
+
+- 在评估数据库直连接入方案的研发同学；
+- 需要判断验收边界的测试与项目同学。
+
+#### 前置条件
+
+- 服务已经启动；
+- 你只需要验证接口合同，不需要真的准备 PostgreSQL 表结构或测试库。
+
+#### 操作步骤
+
+1. 创建一个 `postgres` 数据源。当前实现不会在创建阶段校验数据库连通性，所以下面的占位配置就可以通过：
+
+   ```bash
+   curl -X POST 'http://127.0.0.1:8000/internal/sources' \
+     -H 'Content-Type: application/json' \
+     -H 'X-Internal-Token: your-token' \
+     -d '{
+       "name": "订单库占位源",
+       "type": "postgres",
+       "config": {
+         "dsn": "postgresql://postgres:postgres@localhost:5432/demo",
+         "table": "knowledge_items"
+       },
+       "sync_mode": "incremental",
+       "enabled": true
+     }'
+   ```
+
+2. 记录返回中的 `data.id`，后文记为 `PG_SOURCE_ID`。
+
+3. 在默认的 `SYNC_RUN_INLINE=true` 模式下触发一次同步：
+
+   ```bash
+   curl -X POST 'http://127.0.0.1:8000/internal/sources/PG_SOURCE_ID/sync' \
+     -H 'Content-Type: application/json' \
+     -H 'X-Internal-Token: your-token' \
+     -d '{
+       "mode": "incremental",
+       "operator": "manual"
+     }'
+   ```
+
+4. 再查询任务详情，关注 `status` 和 `error_summary`。
+
+#### 预期结果
+
+- 创建阶段会成功返回 `code=0`，说明当前接口合同允许先把 `postgres` 数据源注册进系统；
+- 在 `SYNC_RUN_INLINE=true` 时，同步请求会创建任务并立即执行，最终任务状态通常是 `FAILED`；
+- 查询 `/internal/jobs/{job_id}` 时，`error_summary` 应包含 `PostgresConnector will be implemented in phase 2`，这表示你触发到了预留实现，而不是配置写错；
+- 如果你把 `SYNC_RUN_INLINE` 改成 `false` 再触发，同步接口只会返回 `PENDING`，但这不代表 `postgres` 已经可用，只是任务尚未执行而已。
+
+#### 常见问题 / 注意事项
+
+- 当前代码没有把 `postgres` 同步失败映射成 `501`，而是把任务记为 `FAILED` 并把原因写入 `error_summary`；
+- 因为 `postgres` 连接器还没实现，所以这里的失败应视为“一期已知边界”，不应与文件源、API 源的真正缺陷混为一谈；
+- 如果你在验收中要描述这个能力，建议明确写成“支持创建占位数据源，不支持真实数据库同步”。

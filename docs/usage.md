@@ -324,7 +324,8 @@ curl -X POST 'http://127.0.0.1:8000/internal/sources' \
 可以创建 `type=postgres` 的数据源，但当前仅用于预留二期能力。
 
 - 创建接口可通过
-- 触发同步时会返回 `501 Not Implemented`
+- 当 `SYNC_RUN_INLINE=true` 时，触发同步会创建任务并立即执行，任务最终会以 `FAILED` 结束，`error_summary` 中会提示 `PostgresConnector will be implemented in phase 2`
+- 当 `SYNC_RUN_INLINE=false` 时，触发同步只会创建 `PENDING` 任务，不会自动执行
 
 ## 11. 查看数据源详情
 
@@ -603,4 +604,3 @@ python scripts/rebuild_index.py src_xxx --base-url http://127.0.0.1:8000 --token
 - 容器编排：`docker/docker-compose.yml`
 - 环境变量示例：`.env.example`
 - 触发脚本：`scripts/run_full_sync.py`、`scripts/run_incremental_sync.py`、`scripts/rebuild_index.py`
-
