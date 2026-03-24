@@ -67,6 +67,7 @@
 - 检索 / 问答关键路径有单测或集成测试
 
 ### [ ] Step: T5 MinIO 归档与可观测增强
+<!-- chat-id: a47a9b74-8642-41ae-939a-49a213da1f66 -->
 增加归档、健康检查、结构化日志：
 - 同步任务支持原文快照和失败样本归档到 MinIO
 - `/health` 输出数据库、Redis、MinIO、embedding、pipeline engine 的状态分层信息

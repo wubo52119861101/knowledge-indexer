@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Protocol, Sequence
 
 from app.core.config import Settings
+from app.core.health import build_health_payload, short_error
 
 try:
     import psycopg
@@ -121,19 +122,61 @@ def postgres_connection(database_url: str | None) -> Iterator[ConnectionLike]:
         connection.close()
 
 
+
 def create_postgres_connection_factory(settings: Settings) -> ConnectionFactory:
     return lambda: postgres_connection(settings.database_url)
 
 
-def check_database_health(settings: Settings) -> dict[str, str]:
+
+def check_database_health(settings: Settings) -> dict[str, Any]:
     backend = settings.repository_backend.lower()
     if backend != "postgres":
-        return {"status": "disabled", "detail": f"当前仓储后端为 {backend}，未启用 PostgreSQL 持久化"}
+        return build_health_payload(
+            status="disabled",
+            detail=f"当前仓储后端为 {backend}，未启用 PostgreSQL 持久化",
+            configuration="disabled",
+            connectivity="not_required",
+            capability="repository_inmemory",
+        )
     if not settings.database_url:
-        return {"status": "misconfigured", "detail": "REPOSITORY_BACKEND=postgres 但 DATABASE_URL 未配置"}
+        return build_health_payload(
+            status="misconfigured",
+            detail="REPOSITORY_BACKEND=postgres 但 DATABASE_URL 未配置",
+            configuration="misconfigured",
+            connectivity="unknown",
+            capability="repository_unavailable",
+        )
     if psycopg is None:
-        return {"status": "degraded", "detail": "已启用 postgres 仓储，但当前环境未安装 psycopg 依赖"}
-    return {"status": "configured", "detail": "PostgreSQL 连接串已配置，仓储可切换为正式持久化实现"}
+        return build_health_payload(
+            status="degraded",
+            detail="已启用 postgres 仓储，但当前环境未安装 psycopg 依赖",
+            configuration="configured",
+            connectivity="unavailable",
+            capability="repository_unavailable",
+        )
+
+    try:
+        with postgres_connection(settings.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+    except Exception as exc:
+        return build_health_payload(
+            status="configured",
+            detail=f"PostgreSQL 已配置，但连通性检查失败: {short_error(exc)}",
+            configuration="configured",
+            connectivity="unreachable",
+            capability="repository_unavailable",
+        )
+
+    return build_health_payload(
+        status="reachable",
+        detail="PostgreSQL 已连接，可用于持久化仓储与向量检索",
+        configuration="configured",
+        connectivity="reachable",
+        capability="repository_ready",
+    )
+
 
 
 def row_to_dict(description: Sequence[Any] | None, row: Sequence[Any] | None) -> dict[str, Any] | None:
@@ -145,6 +188,7 @@ def row_to_dict(description: Sequence[Any] | None, row: Sequence[Any] | None) ->
         return {str(index): value for index, value in enumerate(row)}
     columns = [column[0] if isinstance(column, Sequence) else getattr(column, "name", str(index)) for index, column in enumerate(description)]
     return {column: value for column, value in zip(columns, row, strict=False)}
+
 
 
 def mask_sensitive_data(value: Any) -> Any:
@@ -162,8 +206,10 @@ def mask_sensitive_data(value: Any) -> Any:
     return value
 
 
+
 def to_pgvector_literal(vector: list[float]) -> str:
     return "[" + ",".join(format(item, ".12g") for item in vector) + "]"
+
 
 
 def from_pgvector(value: Any) -> list[float]:
@@ -178,8 +224,8 @@ def from_pgvector(value: Any) -> list[float]:
     if isinstance(value, bytes):
         value = value.decode("utf-8")
     if isinstance(value, str):
-        stripped = value.strip().lstrip("[").rstrip("]")
-        if not stripped:
+        text = value.strip().removeprefix("[").removesuffix("]")
+        if not text:
             return []
-        return [float(item.strip()) for item in stripped.split(",")]
+        return [float(item.strip()) for item in text.split(",")]
     raise TypeError(f"unsupported pgvector payload type: {type(value)!r}")

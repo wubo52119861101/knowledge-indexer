@@ -43,6 +43,10 @@ class JobService:
     def save(self, job: IndexJob) -> IndexJob:
         return self.job_repo.save(job)
 
+    def set_snapshot_path(self, job: IndexJob, snapshot_path: str | None) -> IndexJob:
+        job.snapshot_path = snapshot_path
+        return self.job_repo.save(job)
+
     def mark_running(self, job: IndexJob) -> IndexJob:
         job.status = JobStatus.RUNNING
         job.error_summary = None
@@ -99,11 +103,15 @@ class JobService:
             job.failed_count = failed_count
         job.failure_stage = failure_stage
         job.checkpoint_after = checkpoint_after
+        if job.started_at is None:
+            job.started_at = utcnow()
         job.finished_at = utcnow()
         return self.job_repo.save(job)
 
     def mark_cancelled(self, job: IndexJob, reason: str | None = None) -> IndexJob:
         job.status = JobStatus.CANCELLED
         job.error_summary = reason
+        if job.started_at is None:
+            job.started_at = utcnow()
         job.finished_at = utcnow()
         return self.job_repo.save(job)
