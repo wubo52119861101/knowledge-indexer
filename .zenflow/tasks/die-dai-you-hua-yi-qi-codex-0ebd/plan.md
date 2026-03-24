@@ -62,7 +62,8 @@
 <!-- chat-id: 7c55c3f8-c19c-4e95-8537-935d1a169023 -->
 补齐问答降级、rerank 降级、取消任务、健康检查等关键单测与文档说明，为后续 Code Review 和测试验证提供输入。
 
-### [ ] Step: Code Review
+### [x] Step: Code Review
+<!-- chat-id: b1af71fc-adad-4276-9cda-5269be2aea0d -->
 <!-- agent: codex-gpt-5-2-codex -->
 对编码实现进行代码审查，检查以下维度并输出到 `{@artifacts_path}/review.md`：
 - 正确性：逻辑是否符合需求和技术方案
