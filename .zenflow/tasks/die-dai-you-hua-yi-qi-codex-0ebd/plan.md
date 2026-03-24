@@ -46,7 +46,8 @@
 <!-- chat-id: 5f3d925a-e5b4-46dc-9db3-51674a4b17f9 -->
 统一扩展 `Settings`、`PipelineEngineInfo`、`JobStatus/IndexJob` 与 `ServiceContainer` 注入点，建立 LLM、rerank、pipeline engine、job runner 的默认配置和共享数据结构，保证兼容现有接口与 `SYNC_RUN_INLINE`。
 
-### [ ] Step: T2 问答链路编排与生成能力
+### [x] Step: T2 问答链路编排与生成能力
+<!-- chat-id: 9f47c0bb-17fe-44f7-bb2d-a562cde63a39 -->
 在 `qa_service` 中落地“检索 → 证据判定 → 可选 rerank → 生成/兜底”，新增 `answer_generator`、`rerank_service`，并扩展 `/internal/ask`、`/internal/search` 响应字段。
 
 ### [ ] Step: T3 任务取消接口与执行器治理
