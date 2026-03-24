@@ -1,5 +1,7 @@
 # knowledge-indexer 使用说明（参考文档）
 
+<a id="reference-quick-nav"></a>
+
 本文档是 `knowledge-indexer` 的接口与配置参考文档，面向接入开发和维护者。
 
 如果你想按真实操作路径快速跑通项目，请优先阅读 `docs/use-cases.md`；如果你要核对接口字段、环境变量、同步模式和限制说明，再查阅本文档。
@@ -112,6 +114,9 @@ cp .env.example .env
 | `DATABASE_URL` | PostgreSQL 连接串，占位 | `postgresql://postgres:postgres@localhost:5432/knowledge_indexer` |
 | `REDIS_URL` | Redis 地址，占位 | `redis://localhost:6379/0` |
 | `MINIO_ENDPOINT` | MinIO 地址，占位 | `localhost:9000` |
+| `MINIO_ACCESS_KEY` | MinIO Access Key，占位 | `minioadmin` |
+| `MINIO_SECRET_KEY` | MinIO Secret Key，占位 | `minioadmin` |
+| `MINIO_BUCKET` | MinIO Bucket 名称，占位 | `knowledge-indexer` |
 | `API_CONNECTOR_TIMEOUT_SECONDS` | API 数据源拉取超时秒数 | `10` |
 
 ### 5.3 启动服务
@@ -158,7 +163,7 @@ docker compose -f docker/docker-compose.yml up --build
 示例：
 
 ```bash
-curl -H 'X-Internal-Token: your-token' http://127.0.0.1:8000/health
+curl -H 'X-Internal-Token: your-token' http://127.0.0.1:8000/internal/search
 ```
 
 说明：`/health` 不要求鉴权；`/internal/*` 要求鉴权。
@@ -216,7 +221,7 @@ curl http://127.0.0.1:8000/health
 说明：
 
 - `file` 和 `api` 已可用于创建与同步
-- `postgres` 当前仅为接口占位，同步时会返回未实现错误
+- `postgres` 当前仅为接口占位；触发同步后会按 `SYNC_RUN_INLINE` 的配置表现为任务 `FAILED` 或保持 `PENDING`
 
 ### 10.2 创建文件源
 
@@ -791,6 +796,7 @@ python scripts/rebuild_index.py src_xxx --base-url http://127.0.0.1:8000 --token
 ## 21. 相关入口
 
 - 项目说明：`README.md`
+- 使用手册：`docs/use-cases.md`
 - 应用入口：`app/main.py`
 - 容器编排：`docker/docker-compose.yml`
 - 环境变量示例：`.env.example`

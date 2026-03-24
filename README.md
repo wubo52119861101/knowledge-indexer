@@ -14,6 +14,12 @@
 
 建议阅读顺序：先看 `README.md` 建立全局认知，再看 `docs/use-cases.md` 跑通案例，最后按需查阅 `docs/usage.md` 做字段和接口核对。
 
+常用入口：
+
+- 首次启动与 10 分钟上手：[`docs/use-cases.md`](docs/use-cases.md#manual-quickstart)
+- 数据源接入、同步任务与一期边界：[`docs/use-cases.md`](docs/use-cases.md#manual-sync)
+- 环境变量、接口字段与 FAQ：[`docs/usage.md`](docs/usage.md#reference-quick-nav)
+
 ## 当前实现范围
 - FastAPI 内部接口：`/internal/sources`、`/internal/jobs/{id}`、`/internal/search`、`/internal/ask`、`/health`
 - 一期骨架能力：文件源 / API 源接入、同步任务、文本清洗切分、确定性哈希向量、ACL 过滤、证据不足兜底
@@ -27,9 +33,9 @@ pip install -e .[dev]
 uvicorn app.main:app --reload
 ```
 
-完整使用说明见 `docs/usage.md`。
+场景化使用手册见 [`docs/use-cases.md`](docs/use-cases.md#manual-quickstart)。
 
-如果你要按业务场景联调，优先阅读 `docs/use-cases.md`；如果你要核对请求字段、环境变量和限制说明，再查 `docs/usage.md`。
+如果你要按业务场景联调，优先阅读 [`docs/use-cases.md`](docs/use-cases.md#manual-sync)；如果你要核对请求字段、环境变量和限制说明，再查 [`docs/usage.md`](docs/usage.md#reference-quick-nav)。
 
 ## 环境变量
 复制 `.env.example` 为 `.env` 后按需修改：
