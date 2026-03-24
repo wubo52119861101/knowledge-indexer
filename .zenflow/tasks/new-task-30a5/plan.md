@@ -73,7 +73,8 @@
 - `/health` 输出数据库、Redis、MinIO、embedding、pipeline engine 的状态分层信息
 - 同步任务日志具备 job_id、source_id、mode、status、duration_ms 等结构化字段
 
-### [ ] Step: T6 联调文档与迁移说明补齐
+### [x] Step: T6 联调文档与迁移说明补齐
+<!-- chat-id: ec933d0d-afd3-471e-bb7f-a9638b10dbf4 -->
 补齐配置说明、迁移步骤、接入示例：
 - docs/usage.md 与 README.md 覆盖二期新增配置、接口变化、运行方式
 - 提供 Java 调用方可参考的接入 / 联调示例
