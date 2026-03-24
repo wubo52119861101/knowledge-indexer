@@ -7,6 +7,11 @@ from pydantic import BaseModel
 from app.models.common import JobStatus, PipelineEngineInfo, SyncMode
 
 
+class CancelJobRequest(BaseModel):
+    operator: str
+    reason: str | None = None
+
+
 class JobItem(BaseModel):
     id: str
     source_id: str

@@ -1,6 +1,8 @@
+from threading import Event
 from typing import Any
 
 from app.connectors.base import BaseConnector
+from app.core.config import Settings
 from app.models.common import JobStatus, SourceType, SyncMode, generate_id
 from app.models.document import Document
 from app.models.job import IndexJob
@@ -14,6 +16,7 @@ from app.schemas.document import DocumentPayload
 from app.services.document_processor import DocumentProcessor
 from app.services.embedding_service import HashEmbeddingService
 from app.services.indexing_service import IndexingService
+from app.services.job_runner import JobRunner
 from app.services.job_service import JobService
 
 
@@ -151,3 +154,63 @@ def test_full_sync_marks_missing_documents_deleted_and_clears_chunks() -> None:
     assert chunk_repo.list_by_document(stale_after_sync.id) == []
     assert fresh_after_sync.status.value == "ACTIVE"
     assert chunk_repo.list_by_document(fresh_after_sync.id) != []
+
+
+class BlockingConnector(StubConnector):
+    def __init__(self, records: list[Any], first_record_started: Event, resume_first_record: Event) -> None:
+        super().__init__(records)
+        self.first_record_started = first_record_started
+        self.resume_first_record = resume_first_record
+        self.normalize_calls = 0
+
+    def normalize(self, source: Source, record: Any) -> DocumentPayload:
+        payload = super().normalize(source, record)
+        if self.normalize_calls == 0:
+            self.first_record_started.set()
+            self.resume_first_record.wait(timeout=2)
+        self.normalize_calls += 1
+        return payload
+
+
+def test_background_runner_cancels_running_job_without_checkpoint_or_touch_sync() -> None:
+    service, source_repo, _document_repo, _chunk_repo, checkpoint_repo, job_service = build_indexing_service()
+    source = source_repo.add(
+        Source(
+            id="src_1",
+            name="demo",
+            type=SourceType.API,
+            config={"base_url": "http://example.com"},
+            sync_mode=SyncMode.INCREMENTAL,
+        )
+    )
+    job = job_service.create_job(source_id=source.id, mode=SyncMode.INCREMENTAL, triggered_by="tester")
+    first_record_started = Event()
+    resume_first_record = Event()
+    connector = BlockingConnector(
+        [
+            {"external_doc_id": "doc-1", "title": "one", "content": "first"},
+            {"external_doc_id": "doc-2", "title": "two", "content": "second"},
+        ],
+        first_record_started=first_record_started,
+        resume_first_record=resume_first_record,
+    )
+    runner = JobRunner(Settings(SYNC_RUN_INLINE=False))
+
+    queued_job = runner.submit(job, lambda: service.run_job(source, job, connector))
+
+    assert queued_job.status in {JobStatus.PENDING, JobStatus.RUNNING}
+    assert first_record_started.wait(timeout=2) is True
+
+    cancelling = job_service.request_cancel(job.id, operator="system", reason="manual cancel")
+    assert cancelling.status is JobStatus.CANCELLING
+
+    resume_first_record.set()
+    assert runner.wait(job.id, timeout=2) is True
+
+    result = job_service.get_job(job.id)
+    assert result is not None
+    assert result.status is JobStatus.CANCELLED
+    assert result.cancel_requested_by == "system"
+    assert result.cancel_reason == "manual cancel"
+    assert checkpoint_repo.get(source.id, "default") is None
+    assert source_repo.get(source.id).last_sync_at is None

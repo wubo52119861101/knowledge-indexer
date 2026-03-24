@@ -38,7 +38,10 @@ class IndexingService:
         self.embedding_service = embedding_service
 
     def run_job(self, source: Source, job: IndexJob, connector: BaseConnector) -> IndexJob:
-        self.job_service.mark_running(job)
+        job = self.job_service.mark_running(job)
+        if self._cancel_if_requested(job):
+            return self.job_service.mark_cancelled(job)
+
         checkpoint = self.checkpoint_repo.get(source.id, "default")
         is_full_snapshot = job.mode in {SyncMode.FULL, SyncMode.REBUILD}
 
@@ -55,6 +58,8 @@ class IndexingService:
             error_messages: list[str] = []
 
             for raw_record in raw_records:
+                if self._cancel_if_requested(job):
+                    return self.job_service.mark_cancelled(job)
                 try:
                     payload = connector.normalize(source, raw_record)
                     seen_external_doc_ids.add(payload.external_doc_id)
@@ -80,7 +85,11 @@ class IndexingService:
                             ],
                         )
                     )
+                    if self._cancel_if_requested(job):
+                        return self.job_service.mark_cancelled(job)
                     chunks = self._build_chunks(document)
+                    if self._cancel_if_requested(job):
+                        return self.job_service.mark_cancelled(job)
                     self.chunk_repo.replace_for_document(document.id, chunks)
                     processed_count += 1
                     latest_checkpoint = self._max_checkpoint(
@@ -90,6 +99,9 @@ class IndexingService:
                 except Exception as exc:
                     failed_count += 1
                     error_messages.append(str(exc))
+
+            if self._cancel_if_requested(job):
+                return self.job_service.mark_cancelled(job)
 
             if failed_count > 0:
                 summary = "; ".join(error_messages[:3]) if error_messages else "record processing failed"
@@ -104,11 +116,24 @@ class IndexingService:
                 for document in removed_documents:
                     self.chunk_repo.replace_for_document(document.id, [])
 
+            if self._cancel_if_requested(job):
+                return self.job_service.mark_cancelled(job)
+
             if latest_checkpoint is not None:
                 self.checkpoint_repo.save(source.id, "default", str(latest_checkpoint))
+
+            if self._cancel_if_requested(job):
+                return self.job_service.mark_cancelled(job)
+
             self.source_repo.touch_sync(source.id)
+
+            if self._cancel_if_requested(job):
+                return self.job_service.mark_cancelled(job)
+
             return self.job_service.mark_succeeded(job, processed_count=processed_count, failed_count=failed_count)
         except Exception as exc:
+            if self._cancel_if_requested(job):
+                return self.job_service.mark_cancelled(job)
             return self.job_service.mark_failed(job, error_summary=str(exc), failed_count=job.failed_count)
 
     def _build_chunks(self, document: Document) -> list[Chunk]:
@@ -128,6 +153,9 @@ class IndexingService:
                 )
             )
         return chunks
+
+    def _cancel_if_requested(self, job: IndexJob) -> bool:
+        return self.job_service.is_cancel_requested(job)
 
     def _max_checkpoint(self, current_value: str | float | int | None, candidate_value: Any) -> str | float | int | None:
         if candidate_value is None:

@@ -6,7 +6,7 @@ from app.core.config import Settings, get_settings
 from app.flows.api_index_flow import ApiIndexFlow
 from app.flows.file_index_flow import FileIndexFlow
 from app.flows.postgres_index_flow import PostgresIndexFlow
-from app.models.common import SourceType
+from app.models.common import SourceType, SyncMode
 from app.repositories.checkpoint_repo import InMemoryCheckpointRepository
 from app.repositories.chunk_repo import InMemoryChunkRepository
 from app.repositories.document_repo import InMemoryDocumentRepository
@@ -75,23 +75,21 @@ class ServiceContainer:
             SourceType.POSTGRES: PostgresIndexFlow(self.indexing_service),
         }
 
-    def trigger_sync(self, source_id: str, mode, operator: str):
+    def trigger_sync(self, source_id: str, mode: SyncMode, operator: str):
         source = self.source_service.get_source(source_id)
         if source is None:
             raise KeyError(f"source {source_id} not found")
         if not source.enabled:
             raise ValueError(f"source {source_id} is disabled")
 
+        flow = self._flows[source.type]
         job = self.job_service.create_job(
             source_id=source_id,
             mode=mode,
             triggered_by=operator,
             pipeline_engine=self.pipeline_engine_service.resolve("sync"),
         )
-        if self.settings.sync_run_inline:
-            flow = self._flows[source.type]
-            return flow.run(source, job)
-        return job
+        return self.job_runner.submit(job, lambda: flow.run(source, job))
 
 
 @lru_cache(maxsize=1)

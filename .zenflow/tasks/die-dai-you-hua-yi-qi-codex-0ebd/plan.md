@@ -50,7 +50,8 @@
 <!-- chat-id: 9f47c0bb-17fe-44f7-bb2d-a562cde63a39 -->
 在 `qa_service` 中落地“检索 → 证据判定 → 可选 rerank → 生成/兜底”，新增 `answer_generator`、`rerank_service`，并扩展 `/internal/ask`、`/internal/search` 响应字段。
 
-### [ ] Step: T3 任务取消接口与执行器治理
+### [x] Step: T3 任务取消接口与执行器治理
+<!-- chat-id: 6173008e-72be-4784-8d3c-036111569e55 -->
 新增 `/internal/jobs/{job_id}/cancel`，实现 `PENDING/RUNNING` 的取消状态流转、后台执行模式和 `IndexingService` 检查点终止能力，保证幂等与兼容。
 
 ### [ ] Step: T4 pipeline_engine 对外可观测化
